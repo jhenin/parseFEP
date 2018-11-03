@@ -32,11 +32,15 @@
 # (3) Enable .fep as output file in GUI
 #######################################################################
 
-package require exectool 1.2
-package require multiplot
+
 package provide parsefep 2.1
 
 namespace eval ::ParseFEP:: {
+  if { [catch {package require exectool 1.2}] } {
+    set has_exectool 0
+  } else {
+    set has_exectool 1
+  }
   namespace export parsefepgui
   namespace export parsefep
   variable w
@@ -52,7 +56,7 @@ namespace eval ::ParseFEP:: {
   variable fepofile        ""
   variable fepbofile       ""
   variable fepdwfile       ""
-  variable nb_file
+  variable nb_windows
   variable nb_sample
   variable nb_equil
   variable FEPfreq
@@ -79,11 +83,11 @@ namespace eval ::ParseFEP:: {
   variable file_lambda
   # Data (Letitia)
   variable jstart
-  variable fwd_nb_file
+  variable fwd_nb_windows
   variable fwd_nb_sample
   variable fwd_nb_equil
   variable fwd_FEPfreq
-  variable bwd_nb_file
+  variable bwd_nb_windows
   variable bwd_nb_sample
   variable bwd_nb_equil
   variable bwd_FEPfreq
@@ -91,11 +95,15 @@ namespace eval ::ParseFEP:: {
   variable fwd_Lsample
   variable fwd_Lsample_energy1
   variable fwd_Lsample_energy2
+  variable fwd_Lnb_sample
+  variable fwd_Lnb_equil
   variable fwd_lambda
   variable fwd_lambda2
   variable bwd_Lsample
   variable bwd_Lsample_energy1
   variable bwd_Lsample_energy2
+  variable bwd_Lnb_sample
+  variable bwd_Lnb_equil
   variable bwd_lambda
   variable bwd_lambda2
 }
@@ -368,13 +376,15 @@ proc readfepout {fepout Label} {
   set flag_rdsample 0
   set nb_equil 0
   set nb_sample 0
-  set nb_file 0
+  set nb_windows 0
   set FEPfreq 0
   set lambda ""
   set lambda2 ""
   set Lsample {}
   set Lsample_energy1 {}
   set Lsample_energy2 {}
+  set Lnb_equil {}
+  set Lnb_sample {}
 
 
   # Read NAMD FEP output file
@@ -382,11 +392,12 @@ proc readfepout {fepout Label} {
   while {![eof $fid]} {
     gets $fid data
     # prepare to go through equilibration data
-    if {[regexp "#NEW FEP WINDOW" $data]} {
-      if {[llength $data] != 9} { error "The file $fepout is not in the traditional $Label format. Program stops!" }
+    if {[regexp "^#NEW FEP WINDOW" $data]} {
+      if {[llength $data] != 9} { error "The file $fepout has incorrect format in NEW FEP WINDOW line." }
       if { $previous_window == 1 } {
         set flag_rdsample 0
         set nb_sample [expr {$samindex+$nb_equil-1}];  # ParseFEP counts nb_equil in nb_sample but do not use the equilibration data for analysis.
+        lappend Lnb_sample $nb_sample
        } else {
          set previous_window 1
        }
@@ -399,7 +410,7 @@ proc readfepout {fepout Label} {
     }
     # go through equilibration data
     if {[expr $flag_rdequil]} {
-      if {[regexp "FepEnergy" $data]} {
+      if {[regexp "^FepEnergy" $data]} {
         incr equindex 1
        } else {
          set flag_rdequil 0
@@ -407,14 +418,14 @@ proc readfepout {fepout Label} {
        }
     }
     # prepare to read sampling data
-    if {[regexp "#STARTING COLLECTION" $data]} {
+    if {[regexp "^#STARTING COLLECTION" $data]} {
       set flag_rdsample 1
       set samindex 0
       continue
     }
     # read sampling data
     if {[expr $flag_rdsample]} {
-      if {[regexp "FepEnergy" $data]} {
+      if {[regexp "^FepEnergy" $data]} {
         foreach {a b c d e f g h i j} $data {break}
         lappend Lsample $g
         lappend Lsample_energy1 [expr {$c+$e}]
@@ -423,8 +434,11 @@ proc readfepout {fepout Label} {
        }
     }
   }
+  # Get number of samples from last window read
+  set nb_sample [expr {$samindex+$nb_equil-1}];
+  lappend Lnb_sample $nb_sample
   close $fid
-  set nb_file [expr {$windex+1}]; # nb_file counts number of FEP windows
+  set nb_windows [expr {$windex+1}];
   if {[expr $nb_equil]==1} {set ::ParseFEP::jstart 0} else {set ::ParseFEP::jstart 1}
 
   # If sample array size = 0, return with error
@@ -441,11 +455,11 @@ proc readfepout {fepout Label} {
   set fid [open $fepout "r"]
   while {![eof $fid]} {
     gets $fid data
-    if {[regexp "FepEnergy" $data]} {
+    if {[regexp "^FepEnergy" $data]} {
       set t1 [lindex $data 1]
       while {![eof $fid]} {
         gets $fid data
-        if {[regexp "FepEnergy" $data]} {
+        if {[regexp "^FepEnergy" $data]} {
           set t2 [lindex $data 1]
           break
             }
@@ -459,7 +473,7 @@ proc readfepout {fepout Label} {
   # Assign data according to Label
   set nequil [expr {$nb_equil-1}]
   set nsample [expr {$nb_sample-$nb_equil+1}]
-  set nwindow $nb_file
+  set nwindow $nb_windows
 
   ## debug
   #set totalsize [llength $Lsample]
@@ -474,7 +488,7 @@ proc readfepout {fepout Label} {
   if {$Label=="Forward"} {
     set ::ParseFEP::fwd_nb_equil $nb_equil
     set ::ParseFEP::fwd_nb_sample $nb_sample
-    set ::ParseFEP::fwd_nb_file $nb_file
+    set ::ParseFEP::fwd_nb_windows $nb_windows
     set ::ParseFEP::fwd_FEPfreq $FEPfreq
     set ::ParseFEP::fwd_lambda $lambda
     set ::ParseFEP::fwd_lambda2 $lambda2
@@ -484,7 +498,7 @@ proc readfepout {fepout Label} {
   } elseif {$Label=="Backward"} {
     set ::ParseFEP::bwd_nb_equil $nb_equil
     set ::ParseFEP::bwd_nb_sample $nb_sample
-    set ::ParseFEP::bwd_nb_file $nb_file
+    set ::ParseFEP::bwd_nb_windows $nb_windows
     set ::ParseFEP::bwd_FEPfreq $FEPfreq
     set ::ParseFEP::bwd_lambda $lambda
     set ::ParseFEP::bwd_lambda2 $lambda2
@@ -516,7 +530,7 @@ proc ::ParseFEP::readdoublewide {fepout} {
   set flag_rdsample 0
   set nb_equil 0
   set nb_sample 0
-  set nb_file 0
+  set nb_windows 0
   set FEPfreq 0
   set lambda ""
   set lambda2 ""
@@ -533,7 +547,7 @@ proc ::ParseFEP::readdoublewide {fepout} {
   while {![eof $fid]} {
     gets $fid data
     # prepare to go through equilibration data
-    if {[regexp "#NEW FEP WINDOW" $data]} {
+    if {[regexp "^#NEW FEP WINDOW" $data]} {
       if {[llength $data] != 11} { error "The file $fepout is not in the double-wide format. Program stops!" }
       if { $previous_window == 1 } {
         set flag_rdsample 0
@@ -551,7 +565,7 @@ proc ::ParseFEP::readdoublewide {fepout} {
     }
     # go through equilibration data
     if {[expr $flag_rdequil]} {
-      if {[regexp "FepEnergy" $data]} {
+      if {[regexp "^FepEnergy" $data]} {
         incr equindex 1
        } else {
          set flag_rdequil 0
@@ -559,14 +573,14 @@ proc ::ParseFEP::readdoublewide {fepout} {
        }
     }
     # prepare to read sampling data
-    if {[regexp "#STARTING COLLECTION" $data]} {
+    if {[regexp "^#STARTING COLLECTION" $data]} {
       set flag_rdsample 1
       set samindex 0
       continue
     }
     # read sampling data
     if {[expr $flag_rdsample]} {
-      if {[regexp "FepEnergy" $data]} {
+      if {[regexp "^FepEnergy" $data]} {
         foreach {a b c d e f g h i j k l m n o} $data {break}
         lappend fwd_Lsample $i
         lappend fwd_Lsample_energy1 [expr {$c+$f}]
@@ -597,11 +611,11 @@ proc ::ParseFEP::readdoublewide {fepout} {
   set fid [open $fepout "r"]
   while {![eof $fid]} {
     gets $fid data
-    if {[regexp "FepEnergy" $data]} {
+    if {[regexp "^FepEnergy" $data]} {
       set t1 [lindex $data 1]
       while {![eof $fid]} {
         gets $fid data
-        if {[regexp "FepEnergy" $data]} {
+        if {[regexp "^FepEnergy" $data]} {
           set t2 [lindex $data 1]
           break
             }
@@ -696,11 +710,11 @@ proc ::ParseFEP::readdoublewide {fepout} {
   if {[expr $nb_equil]==1} {set ::ParseFEP::jstart 0} else {set ::ParseFEP::jstart 1}
   set ::ParseFEP::fwd_nb_equil $nb_equil
   set ::ParseFEP::fwd_nb_sample $nb_sample
-  set ::ParseFEP::fwd_nb_file $nwindows
+  set ::ParseFEP::fwd_nb_windows $nwindows
   set ::ParseFEP::fwd_FEPfreq $FEPfreq
   set ::ParseFEP::bwd_nb_equil $nb_equil
   set ::ParseFEP::bwd_nb_sample $nb_sample
-  set ::ParseFEP::bwd_nb_file $nwindows
+  set ::ParseFEP::bwd_nb_windows $nwindows
   set ::ParseFEP::bwd_FEPfreq $FEPfreq
 
   unset lambda
@@ -793,7 +807,7 @@ proc ::ParseFEP::namdparse {  } {
   }
 
   # Assign data before we rename them all
-  set ::ParseFEP::nb_file $::ParseFEP::fwd_nb_file
+  set ::ParseFEP::nb_windows $::ParseFEP::fwd_nb_windows
   set ::ParseFEP::FEPfreq $::ParseFEP::fwd_FEPfreq
   set ::ParseFEP::nb_sample $::ParseFEP::fwd_nb_sample
   set ::ParseFEP::nb_equil $::ParseFEP::fwd_nb_equil
@@ -802,7 +816,7 @@ proc ::ParseFEP::namdparse {  } {
   set ::ParseFEP::kT [expr {$::ParseFEP::k * $::ParseFEP::temperature}]
 
   puts "ParseFEP: Get the number of samples per window"
-  puts "ParseFEP: Split time-series in $::ParseFEP::fwd_nb_file files"
+  puts "ParseFEP: Split time-series in $::ParseFEP::fwd_nb_windows files"
   puts "ParseFEP: $::ParseFEP::fwd_FEPfreq steps between stored samples"
   puts "ParseFEP: $::ParseFEP::fwd_nb_sample effective samples per windows"
   puts "ParseFEP: $::ParseFEP::fwd_nb_equil effective equilibration steps per window"
@@ -864,14 +878,14 @@ proc ::ParseFEP::normal_parse_log {namdlogfile  fororback} {
   close $infile
   # required for fepdisp_unix
 
-  for {set windex 0} {$windex<$::ParseFEP::nb_file} {incr windex} {
+  for {set windex 0} {$windex<$::ParseFEP::nb_windows} {incr windex} {
     set fepdata {}
     set fepdata_energy1 {}
     set fepdata_energy2 {}
     set window [expr {$windex+1}]
     if {$fororback == "forward"} {
       set ntot    [llength $::ParseFEP::fwd_Lsample]
-      set nsample [expr {$ntot/$::ParseFEP::fwd_nb_file}]
+      set nsample [expr {$ntot/$::ParseFEP::fwd_nb_windows}]
       set mystart [expr {$windex*$nsample+$::ParseFEP::jstart}]
       set myend   [expr {($windex+1)*$nsample-1}]
       set fepdata [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
@@ -879,7 +893,7 @@ proc ::ParseFEP::normal_parse_log {namdlogfile  fororback} {
       set fepdata_energy2 [lrange $::ParseFEP::fwd_Lsample_energy2 $mystart $myend]
       } else {
         set ntot    [llength $::ParseFEP::bwd_Lsample]
-        set nsample [expr {$ntot/$::ParseFEP::bwd_nb_file}]
+        set nsample [expr {$ntot/$::ParseFEP::bwd_nb_windows}]
         set mystart [expr {$windex*$nsample+$::ParseFEP::jstart}]
         set myend   [expr {($windex+1)*$nsample-1}]
         set fepdata [lrange $::ParseFEP::bwd_Lsample $mystart $myend]
@@ -1470,7 +1484,7 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
 #############################################################################################
 proc ::ParseFEP::inaccuracy_estimation {} {
 
-  for {set windex 0} {$windex < $::ParseFEP::nb_file} {incr windex} {
+  for {set windex 0} {$windex < $::ParseFEP::nb_windows} {incr windex} {
 
     set i [lindex $::ParseFEP::fwd_lambda $windex]
     set ideltai [lindex $::ParseFEP::fwd_lambda2 $windex]
@@ -1478,15 +1492,15 @@ proc ::ParseFEP::inaccuracy_estimation {} {
     # Letitia: forward data reading from each window
     set data_forward {}
     set ntot [llength $::ParseFEP::fwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_file}]
+    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
     set mystart [expr {$windex*$nsample}]
     set myend   [expr {$mystart+$nsample-1}]
     set data_forward [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
     # Letitia: backward data reading from the correspondnig window to forward, and set Delta_U -> -1.*Delta_U.
     set data_backward {}
     set ntot [llength $::ParseFEP::bwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_file}]
-    for {set j 0} {$j<$::ParseFEP::nb_file} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
+    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
+    for {set j 0} {$j<$::ParseFEP::nb_windows} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
     set mystart [expr {$bwd_windex*$nsample}]
     set myend   [expr {$mystart+$nsample-1}]
     foreach item [lrange $::ParseFEP::bwd_Lsample $mystart $myend] {lappend data_backward [expr {-1.0*$item}]}
@@ -1694,7 +1708,7 @@ proc ::ParseFEP::bar_estimate {} {
   set A_now 0.
   set sigma_2_now 0.
 
-  for {set windex 0} {$windex < $::ParseFEP::nb_file} {incr windex} {
+  for {set windex 0} {$windex < $::ParseFEP::nb_windows} {incr windex} {
 
     set i [lindex $::ParseFEP::fwd_lambda $windex]
     set ideltai [lindex $::ParseFEP::fwd_lambda2 $windex]
@@ -1704,15 +1718,15 @@ proc ::ParseFEP::bar_estimate {} {
     # Letitia: forward data reading from each window
     set data_forward {}
     set ntot [llength $::ParseFEP::fwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_file}]
+    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
     set mystart [expr {$windex*$nsample}]
     set myend   [expr {$mystart+$nsample-1}]
     set data_forward [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
     # Letitia: backward data reading from the correspondnig window to forward, and set Delta_U -> -1.*Delta_U.
     set data_backward {}
     set ntot [llength $::ParseFEP::bwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_file}]
-    for {set j 0} {$j<$::ParseFEP::nb_file} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
+    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
+    for {set j 0} {$j<$::ParseFEP::nb_windows} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
     set mystart [expr {$bwd_windex*$nsample}]
     set myend   [expr {$mystart+$nsample-1}]
     foreach item [lrange $::ParseFEP::bwd_Lsample $mystart $myend] {lappend data_backward [expr {-1.0*$item}]}
@@ -1854,155 +1868,152 @@ proc ::ParseFEP::fepdisp_unix { } {
   if { $::ParseFEP::fepdwfile != "" } {
     puts "Plotting figures is not supported for doublewide fep output."
     return
+  }
+
+  ###########################################
+  # handle the forward output file
+  ###########################################
+  set num_indicator 0;  	set window  0
+
+  set file_entropy "" ; 	set file ""
+
+  set infile  [open $::ParseFEP::fepofile "r"]
+  set data_file [split [read $infile [file size "$::ParseFEP::fepofile"] ] "\n" ]
+  close $infile
+
+  set fep_delta_a 0.0; set fep_delta_u 0.0; set fep_delta_s 0.0
+
+  set nb_data [expr { int ( $::ParseFEP::nb_sample - $::ParseFEP::nb_equil ) } ]
+
+  set  nb_bin  [expr  { int ( sqrt( $nb_data ) ) } ]
+
+  set first_step 0.
+
+  ##############################################
+  #  start reading the file
+  ##############################################
+  foreach line $data_file  {
+
+    if { [ regexp "^FepEnergy" $line ] } {
+
+      incr  num_indicator
+      if {  [expr   $num_indicator ==  1 ] } {
+        foreach { , temp_step } $line { break }
+        set first_step $temp_step
       }
 
-      ###########################################
-      # handle the forward output file
-      ###########################################
-      set num_indicator 0;  	set window  0
+      #########################################################
+      # handle the data in every window
+      #########################################################
+      if {   $num_indicator > $::ParseFEP::nb_equil   } {
 
-      set file_entropy "" ; 	set file ""
+        foreach { , temp1 , , , , temp6 , , temp9 } $line {break}
+        set temp1 [ expr { ( $temp1 - $first_step - $::ParseFEP::nb_equil * $::ParseFEP::FEPfreq ) * 1.0  } ]
+        lappend file  " $temp1  $temp6  $temp9"
 
-      set infile  [open $::ParseFEP::fepofile  "r"]
-      set data_file [split [read   $infile [file size "$::ParseFEP::fepofile"] ] "\n" ]
-      close $infile
+        foreach { , temp1 temp2 temp3 temp4 temp5 } $line {break}
+        set temp1 [ expr { $temp1 - $first_step - $::ParseFEP::nb_equil * $::ParseFEP::FEPfreq } ]
+        lappend file_entropy  " $temp1  $temp2  $temp3  $temp4  $temp5 "
+      }
+  }
 
-      set fep_delta_a 0.0; set fep_delta_u 0.0; set fep_delta_s 0.0
+  if { [regexp "^#Free energy change for lambda"  $line ] } {
 
-      set nb_data [expr { int ( $::ParseFEP::nb_sample - $::ParseFEP::nb_equil ) } ]
+    incr window
+    ################################################################
+    #	store the data for the disp
+    ################################################################
 
-      set  nb_bin  [expr  { int ( sqrt( $nb_data ) ) } ]
+    set temp_file [ open [format "file%d.dat" $window ] "w"]
 
-      set first_step 0.
+    foreach data $file  {  puts $temp_file "$data" }
 
-      ##############################################
-      #  start reading the file
-      ##############################################
-      foreach line $data_file  {
+    close $temp_file
+    ################################################################
+    # DISPLAY DENSITY OF STATES
+    ################################################################
 
-        if { [ regexp  FepEnergy $line ] } {
+    set min 999999999999; set max -999999999999;
+    foreach elem $file {
+      foreach {, elem2 }  $elem { break }
+      if {  $elem2 < $min  } {  set min $elem2 }
+      if {  $elem2 > $max  } {  set max $elem2 }
+    }
 
-          incr  num_indicator
-          if {  [expr   $num_indicator ==  1 ] } {
-            foreach { , temp_step } $line { break }
-            set first_step $temp_step
-          }
+      set min   [ expr { $min - 0.1 * sqrt( $min ** 2 ) }  ]
+      set max   [ expr { $max + 0.1 * sqrt( $max ** 2 ) }  ]
+      set delta [ expr { ( $max- $min ) / $nb_bin }        ] 
 
-          #########################################################
-          # handle the data in every window
-          #########################################################
-          if {   $num_indicator > $::ParseFEP::nb_equil   } {
-
-            foreach { , temp1 , , , , temp6 , , temp9 } $line {break}
-            set temp1 [ expr { ( $temp1 - $first_step - $::ParseFEP::nb_equil * $::ParseFEP::FEPfreq ) * 1.0  } ]
-            lappend file  " $temp1  $temp6  $temp9"
-
-            foreach {  , temp1  temp2  temp3 temp4 temp5 } $line {break}
-            set temp1 [ expr { $temp1 - $first_step - $::ParseFEP::nb_equil * $::ParseFEP::FEPfreq } ]
-            lappend file_entropy  " $temp1  $temp2  $temp3  $temp4  $temp5 "
-          }
+      set data_list ""
+      for { set i 0  } { $i <= $nb_bin } { incr i } {
+        lappend data_list 0
       }
 
-      if {   [regexp  "#Free energy change for lambda"  $line ] } {
+      set sum 0
+      foreach elem $file {
+        foreach {, elem2 }  $elem { break }
+        set  index     [expr { int (( $elem2  - $min ) / $delta    )  } ]
+        set  temp      [lindex   $data_list  $index ]
+        incr temp
+        set  data_list [lreplace $data_list  $index $index  $temp ]
+        incr sum
+      }
 
-        incr window
-        ################################################################
-        #	store the data for the disp
-        ################################################################
+      set sum [expr { $sum * $delta * 1.0 } ]
+      set temp_file [ open [format "file%d.dat.hist" $window ] "w"]
 
-        set temp_file [ open [format "file%d.dat" $window ] "w"]
+      set j 0
+      foreach elem $data_list  {
+        incr j
+        set i [expr {  ( $j + 0.5 )* $delta + $min } ]
+        puts  $temp_file [format "%15.4f %15.4f %25.4f %25.4f"  $i  [expr { $elem / $sum * 1.0  }] [expr { exp ( - 1.987* $::ParseFEP::temperature /1000 * $i)  } ] [expr { $elem / $sum * exp ( -  1.987* $::ParseFEP::temperature /1000* $i)} ] ]
+      }
 
-        foreach data $file  {  puts $temp_file "$data" }
+      close $temp_file
 
-        close $temp_file
-        ################################################################
-        # DISPLAY DENSITY OF STATES
-        ################################################################
+      #############################################################
+      # compute the entropy for every window in forward output file
+      #############################################################
+      if { $::ParseFEP::entropyindex == 1 } {
+        set energy_difference ""
+        foreach elem $file_entropy {
+          foreach { , elem2 elem3 elem4 elem5 } $elem {break }
+          lappend energy_difference "[expr { $elem2 + $elem4 } ] [expr  { $elem3 + $elem5 } ]"
+        }
 
-        set min 999999999999; set max -999999999999;
-        foreach elem $file {
-          foreach {, elem2 }  $elem { break }
-          if {  $elem2 < $min  } {  set min $elem2 }
-          if {  $elem2 > $max  } {  set max $elem2 }
-              }
+        ############################################################
+        # record the file.entropy
+        ############################################################
 
-              set min   [ expr { $min - 0.1 * sqrt( $min ** 2 ) }  ]
-              set max   [ expr { $max + 0.1 * sqrt( $max ** 2 ) }  ]
-              set delta [ expr { ( $max- $min ) / $nb_bin }        ] 
+        set temp_entropy_file [ open [format "file%d.dat.entropy" $window ] "w"]
+        foreach {s1 s2 s3 n } { 0. 0. 0. 0} {break }
+        foreach elem $energy_difference {
+          foreach { elem1 elem2 }  $elem { break }
+          incr n
+          set s1 [expr  {$s1 * ($n - 1 ) * 1.0 / $n  + exp ( -1 * (  $elem2 - $elem1 ) / $::ParseFEP::kT ) * $elem2 * 1.0 / $n } ]
+          set s2 [expr  {$s2 * ($n - 1 ) * 1.0 / $n  + exp ( -1 * ($elem2 - $elem1 ) / $::ParseFEP::kT ) }  *1.0 /  $n]
+          set s3 [expr  {$s3 * ($n - 1 ) * 1.0 / $n  + $elem1 * 1.0 / $n } ]
 
-              set data_list ""
-              for { set i 0  } { $i <= $nb_bin } { incr i } {
-                lappend data_list 0
-              }
+          set instant_fep_delta_u [expr { $s1 /  $s2 - $s3  } ]
+          set instant_fep_delta_s [expr {  $::ParseFEP::kT* log ($s2 * 1.0 ) + $s1 / $s2 - $s3 } ]
 
-              set sum 0
-              foreach elem $file {
-                foreach {, elem2 }  $elem { break }
-                set  index     [expr { int (( $elem2  - $min ) / $delta    )  } ]
-                set  temp      [lindex   $data_list  $index ]
-                incr temp
-                set  data_list [lreplace $data_list  $index $index  $temp ]
-                incr sum
-              }
+          puts $temp_entropy_file [format "%10d  %12.6f  %15.6f  %12.6f  %15.6f  %12.6f  %12.6f  %12.6f  " [expr { $::ParseFEP::FEPfreq * ( $n -1) } ]  [expr { $elem2 - $elem1} ]  $s1  $s2   $s3  [ expr { -1. * $::ParseFEP::kT*log($s2 * 1.0 / $n)} ]  $instant_fep_delta_u  $instant_fep_delta_s ]
 
-              set sum [expr { $sum * $delta * 1.0 } ]
-              set temp_file [ open [format "file%d.dat.hist" $window ] "w"]
+        }
 
-              set j 0
-              foreach elem $data_list  {
-                incr j
-                set i [expr {  ( $j + 0.5 )* $delta + $min } ]
-                puts  $temp_file [format "%15.4f %15.4f %25.4f %25.4f"  $i  [expr { $elem / $sum * 1.0  }] [expr { exp ( - 1.987* $::ParseFEP::temperature /1000 * $i)  } ] [expr { $elem / $sum * exp ( -  1.987* $::ParseFEP::temperature /1000* $i)} ] ]
-              }
+        close $temp_entropy_file
+        set fep_delta_u [ expr  { $fep_delta_u + $instant_fep_delta_u} ]
+        set fep_delta_s [expr { $fep_delta_s + $instant_fep_delta_s } ]
+      }
 
-              close $temp_file
-
-              #############################################################
-              # compute the entropy for every window in forward output file
-              #############################################################
-              if { $::ParseFEP::entropyindex == 1 } {
-                set energy_difference ""
-                foreach elem $file_entropy {
-                  foreach { , elem2 elem3 elem4 elem5 } $elem {break }
-                  lappend energy_difference "[expr { $elem2 + $elem4 } ] [expr  { $elem3 + $elem5 } ]"
-                  }
-
-                  ############################################################
-                  # record the file.entropy
-                  ############################################################
-
-                  set temp_entropy_file [ open [format "file%d.dat.entropy" $window ] "w"]
-                  foreach {s1 s2 s3 n } { 0. 0. 0. 0} {break }
-                  foreach elem $energy_difference {
-                    foreach { elem1 elem2 }  $elem { break }
-                    incr n
-                    set s1 [expr  {$s1 * ($n - 1 ) * 1.0 / $n  + exp ( -1 * (  $elem2 - $elem1 ) / $::ParseFEP::kT ) * $elem2 * 1.0 / $n } ]
-                    set s2 [expr  {$s2 * ($n - 1 ) * 1.0 / $n  + exp ( -1 * ($elem2 - $elem1 ) / $::ParseFEP::kT ) }  *1.0 /  $n]
-                    set s3 [expr  {$s3 * ($n - 1 ) * 1.0 / $n  + $elem1 * 1.0 / $n } ]
-
-                    set instant_fep_delta_u [expr { $s1 /  $s2 - $s3  } ]
-                    set instant_fep_delta_s [expr {  $::ParseFEP::kT* log ($s2 * 1.0 ) + $s1 / $s2 - $s3 } ]
-
-                    puts $temp_entropy_file [format "%10d  %12.6f  %15.6f  %12.6f  %15.6f  %12.6f  %12.6f  %12.6f  " [expr { $::ParseFEP::FEPfreq * ( $n -1) } ]  [expr { $elem2 - $elem1} ]  $s1  $s2   $s3  [ expr { -1. * $::ParseFEP::kT*log($s2 * 1.0 / $n)} ]  $instant_fep_delta_u  $instant_fep_delta_s ]
-
-                  }
-
-                  close $temp_entropy_file
-
-                  set fep_delta_u [ expr  { $fep_delta_u + $instant_fep_delta_u} ]
-
-                  set fep_delta_s [expr { $fep_delta_s + $instant_fep_delta_s } ] 
-
-              }
-
-              #############################################################
-              # initile the parameter for next window
-              #############################################################
-              set file ""
-              set file_entropy ""
-              set num_indicator 0
-              ######
-          }
+      #############################################################
+      # initile the parameter for next window
+      #############################################################
+      set file ""
+      set file_entropy ""
+      set num_indicator 0
+      ######
+    }
   }
 
 
@@ -2024,7 +2035,7 @@ proc ::ParseFEP::fepdisp_unix { } {
 
     foreach line $data_file  {
 
-      if { [ regexp  "FepEnergy" $line ] } {
+      if { [ regexp "^FepEnergy" $line ] } {
 
         incr  num_indicator
 
@@ -2046,13 +2057,13 @@ proc ::ParseFEP::fepdisp_unix { } {
               }
       }
 
-      if {   [regexp  "#Free energy change for lambda"  $line ] } {
+      if {   [regexp  "^#Free energy change for lambda"  $line ] } {
         incr window
         ################################################################
         #	store the data for the disp
         ################################################################
 
-        set index [expr { $::ParseFEP::nb_file +1 - $window } ]
+        set index [expr { $::ParseFEP::nb_windows +1 - $window } ]
         set temp_file [open [format "file%d.dat.rev" $index ]  "w"]
 
         foreach data $file  { puts $temp_file "$data" }
@@ -2090,7 +2101,7 @@ proc ::ParseFEP::fepdisp_unix { } {
                   set sum [expr { $sum * $delta * 1.0 } ]
                   set j 0
 
-                  set index [expr { $::ParseFEP::nb_file +1 - $window } ]
+                  set index [expr { $::ParseFEP::nb_windows +1 - $window } ]
                   set temp_file [ open [format "file%d.dat.rev.hist" $index ] "w"]
 
                   foreach elem $data_list  {
@@ -2130,7 +2141,7 @@ proc ::ParseFEP::fepdisp_unix { } {
   #######################################################################
   # NUMBER OF PAGES
   #######################################################################
-  set nb_page [ expr 1 + ($::ParseFEP::nb_file - 1) /16 ]
+  set nb_page [ expr 1 + ($::ParseFEP::nb_windows - 1) /16 ]
 
   puts [format  "ParseFEP: Parsing data into %4d XmGrace sheets"  $nb_page ]
 
@@ -3052,16 +3063,18 @@ proc ::ParseFEP::fepdisp_unix { } {
 
   #set platform-specific executable suffix
   set archexe ""
-  switch [vmdinfo arch ] {
-    WIN64 -
-    WIN32 {
-      set archexe ".exe"
-      }
-  }
+  global tcl_platform
+  set OS $tcl_platform(platform)
+  if { [regexp Windows $OS ]} { set archexe ".exe" }
 
   set xmgraceexe [format "xmgrace%s" $archexe]
-  set xmgracecmd [::ExecTool::find -interactive -description "xmgrace"  $xmgraceexe]
-  if { $xmgracecmd == {}  } {
+  if { $::ParseFEP::has_exectool } {
+    set xmgracecmd [::ExecTool::find -interactive -description "xmgrace"  $xmgraceexe]
+  } else {
+    # If we don't have exectool, we hope that xmgrace is in the $PATH
+    set xmgracecmd $xmgraceexe
+  }
+  if { $xmgracecmd == {} } {
     puts "Cannot find $xmgraceexe, aborting. Please install xmgrace, and retry this plugin again."
     ::ParseFEP::Clear
     return
@@ -3069,20 +3082,25 @@ proc ::ParseFEP::fepdisp_unix { } {
 
   for {set  i  1 } {  $i < $page } { incr i } {
 
-    set foo [catch { ::ExecTool::exec chmod u+x     [format   "grace.%d.exec"        $i ] >&@ stdout }]
-    set foo [catch { ::ExecTool::exec               [format "./grace.%d.exec"        $i ] >&@ stdout }]
+    set foo [catch { exec chmod u+x     [format   "grace.%d.exec"        $i ] >&@ stdout }]
+    set foo [catch { exec               [format "./grace.%d.exec"        $i ] >&@ stdout }]
 
-    set foo [catch { ::ExecTool::exec chmod u+x     [format   "grace.hist.%d.exec"   $i ] >&@ stdout }]
-    set foo [catch { ::ExecTool::exec               [format "./grace.hist.%d.exec"   $i ] >&@ stdout }]
+    set foo [catch { exec chmod u+x     [format   "grace.hist.%d.exec"   $i ] >&@ stdout }]
+    set foo [catch { exec               [format "./grace.hist.%d.exec"   $i ] >&@ stdout }]
 
     if {  $::ParseFEP::entropyindex  == 1 } {
-      set foo [catch {::ExecTool::exec chmod u+x   [format "grace.entropy.%d.exec"  $i ] >&@ stdout }]
-      set foo [catch {::ExecTool::exec           [format "./grace.entropy.%d.exec"  $i ] >&@ stdout }]
+      set foo [catch {exec chmod u+x   [format "grace.entropy.%d.exec"  $i ] >&@ stdout }]
+      set foo [catch {exec           [format "./grace.entropy.%d.exec"  $i ] >&@ stdout }]
       }
   }
 
   set displayexe [format "display%s" $archexe]
-  set displaycmd [::ExecTool::find -interactive -description "display"  $displayexe  ]
+  if { $::ParseFEP::has_exectool } {
+    set displaycmd [::ExecTool::find -interactive -description "display"  $displayexe  ]
+  } else {
+    # If we don't have exectool, we hope that display is in the $PATH
+    set displaycmd $displayexe
+  }
   if { $displaycmd == {}  } {
     puts "Cannot find  $displayexe, aborting. Please install ImageMagick, and retry this plugin again."
     #	       ::ParseFEP::Clear
@@ -3090,16 +3108,16 @@ proc ::ParseFEP::fepdisp_unix { } {
   }
 
   for { set i 1 } { $i < $page } { incr i } {
-    set foo [catch { ::ExecTool::exec display   [format  "free-energy.%d.png"    $i ]  &  }]
-    set foo [catch { ::ExecTool::exec display   [format  "probability.%d.png"    $i ]  &  }]
+    set foo [catch { exec display   [format  "free-energy.%d.png"    $i ]  &  }]
+    set foo [catch { exec display   [format  "probability.%d.png"    $i ]  &  }]
     if {  $::ParseFEP::entropyindex == 1} {
-      set foo [catch { ::ExecTool::exec display [format "entropy.%d.png"   $i ]  &  }]
+      set foo [catch { exec display [format "entropy.%d.png"   $i ]  &  }]
       }
   }
 
-  ::ExecTool::exec chmod u+x grace.summary.exec
-  ::ExecTool::exec ./grace.summary.exec
-  ::ExecTool::exec display summary.png &
+  exec chmod u+x grace.summary.exec
+  exec ./grace.summary.exec
+  exec display summary.png &
 
   if { $::ParseFEP::interfilesindex == 0} {
     ::ParseFEP::Clear
@@ -3117,7 +3135,7 @@ proc ::ParseFEP::Clear {} {
   file delete temp.reverse.log
   file delete temp.reverse.entropy.log
 
-  for { set window 1 } { $window  <=  $::ParseFEP::nb_file  } { incr window }  {
+  for { set window 1 } { $window  <=  $::ParseFEP::nb_windows  } { incr window }  {
     file delete [format "file%d.dat" 	  $window]
     file delete [format "file%d.dat.entropy"  $window]
     file delete [format "file%d.dat.hist"     $window]
@@ -3125,7 +3143,7 @@ proc ::ParseFEP::Clear {} {
     file delete [format "file%d.dat.rev.hist" $window]
   }
 
-  set page  [ expr $::ParseFEP::nb_file / 16 +1 ]
+  set page  [ expr $::ParseFEP::nb_windows / 16 +1 ]
   for {set  i  1 } {  $i <= $page } { incr i } {
     file delete [format "grace.%d.exec" 	    $i ]
     file delete [format "grace.hist.%d.exec"    $i ]
