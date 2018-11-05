@@ -393,29 +393,36 @@ proc readfepout {fepout Label} {
     gets $fid data
     # prepare to go through equilibration data
     if {[regexp "^#NEW FEP WINDOW" $data]} {
-      if {[llength $data] != 9} { error "The file $fepout has incorrect format in NEW FEP WINDOW line." }
+      if {[llength $data] != 9} {
+        error "The file $fepout has incorrect format in NEW FEP WINDOW line."
+      }
       if { $previous_window == 1 } {
         set flag_rdsample 0
-        set nb_sample [expr {$samindex+$nb_equil-1}];  # ParseFEP counts nb_equil in nb_sample but do not use the equilibration data for analysis.
+        # nb: ParseFEP reports the number of equilibration samples (nb_equil)
+        # as part of the total sample size (nb_sample), but does not use the
+        # equilibration data for analysis.
+        #
+        set nb_sample [expr {$samindex+$nb_equil-1}]
         lappend Lnb_sample $nb_sample
-       } else {
-         set previous_window 1
-       }
-       incr windex 1
-       lappend lambda  [lindex $data 6]
-       lappend lambda2 [lindex $data 8]
-       set flag_rdequil 1
-       set equindex 0
-       continue
+      } else {
+        set previous_window 1
+      }
+      incr windex 1
+      lappend lambda  [lindex $data 6]
+      lappend lambda2 [lindex $data 8]
+      set flag_rdequil 1
+      set equindex 0
+      continue
     }
     # go through equilibration data
     if {[expr $flag_rdequil]} {
       if {[regexp "^FepEnergy" $data]} {
         incr equindex 1
-       } else {
-         set flag_rdequil 0
-         set nb_equil [expr {$equindex+1}]; # ParseFEP counts the last frame in nb_equil.
-       }
+      } else {
+        set flag_rdequil 0
+        # nb: ParseFEP counts the last frame in nb_equil.
+        set nb_equil [expr {$equindex+1}]
+      }
     }
     # prepare to read sampling data
     if {[regexp "^#STARTING COLLECTION" $data]} {
@@ -424,31 +431,40 @@ proc readfepout {fepout Label} {
       continue
     }
     # read sampling data
-    if {[expr $flag_rdsample]} {
-      if {[regexp "^FepEnergy" $data]} {
-        foreach {a b c d e f g h i j} $data {break}
-        lappend Lsample $g
-        lappend Lsample_energy1 [expr {$c+$e}]
-        lappend Lsample_energy2 [expr {$d+$f}]
-        incr samindex 1
-       }
+    if {[expr $flag_rdsample] && [regexp "^FepEnergy" $data]} {
+      # There's no reason to read TS or alchEnsembleAvg fields.
+      lassign [lrange $data 2 end] ELEC1 ELEC2 VDW1 VDW2 dE
+      lappend Lsample $dE
+      lappend Lsample_energy1 [expr {$ELEC1 + $VDW1}]
+      lappend Lsample_energy2 [expr {$ELEC2 + $VDW2}]
+      incr samindex 1
     }
   }
   # Get number of samples from last window read
-  set nb_sample [expr {$samindex+$nb_equil-1}];
+  set nb_sample [expr {$samindex + $nb_equil - 1}]
   lappend Lnb_sample $nb_sample
   close $fid
   set nb_windows [expr {$windex+1}];
-  if {[expr $nb_equil]==1} {set ::ParseFEP::jstart 0} else {set ::ParseFEP::jstart 1}
+  if {[expr $nb_equil] == 1} {
+    set ::ParseFEP::jstart 0
+  } else {
+    set ::ParseFEP::jstart 1
+  }
 
   # If sample array size = 0, return with error
-  if {[llength $Lsample]==0} {error "No sample data in fepout! Check your input files again!"}
+  if {[llength $Lsample] < 1} {
+    error "No sample data in fepout! Check your input files again!"
+  }
 
   # Check if one mistype the forward and backward input files
   if {$Label=="Forward"} {
-    if {[lindex $lambda 0] > [lindex $lambda end]} {error "Error when reading forward fep/fepout: $fepout is NOT a Forward file. Program stops!"}
+    if {[lindex $lambda 0] > [lindex $lambda end]} {
+      error "Error when reading forward fep/fepout: $fepout is NOT a Forward file. Program stops!"
+    }
   } elseif {$Label=="Backward"} {
-    if {[lindex $lambda 0] < [lindex $lambda end]} {error "Error when reading backward fep/fepout: $fepout is NOT a Backward file. Program stops!"}
+    if {[lindex $lambda 0] < [lindex $lambda end]} {
+      error "Error when reading backward fep/fepout: $fepout is NOT a Backward file. Program stops!"
+    }
   }
 
   # Evaluate FEPfreq
@@ -462,17 +478,17 @@ proc readfepout {fepout Label} {
         if {[regexp "^FepEnergy" $data]} {
           set t2 [lindex $data 1]
           break
-            }
         }
-        set FEPfreq [expr {$t2-$t1}]
-        break
       }
+      set FEPfreq [expr {$t2-$t1}]
+      break
+    }
   }
   close $fid
 
   # Assign data according to Label
-  set nequil [expr {$nb_equil-1}]
-  set nsample [expr {$nb_sample-$nb_equil+1}]
+  set nequil [expr {$nb_equil - 1}]
+  set nsample [expr {$nb_sample - $nb_equil + 1}]
   set nwindow $nb_windows
 
   ## debug
@@ -864,20 +880,25 @@ proc ::ParseFEP::namdparse {  } {
 ##################################################################
 # normal_parse_log calls FEP_formula to perform basic analysis
 ##################################################################
-proc ::ParseFEP::normal_parse_log {namdlogfile  fororback} {
-  puts "ParseFEP: The file been analysed is $namdlogfile"
+proc ::ParseFEP::normal_parse_log {namdlogfile fororback} {
+  puts "ParseFEP: The file being analysed is $namdlogfile"
 
   # required for fepdisp_unix
   set ::ParseFEP::file_lambda ""
   set infile [open $namdlogfile "r"]
-  while { [gets $infile line] >= 0 } {
-    if { [regexp change $line]} {
-      lappend ::ParseFEP::file_lambda  $line
+  while {[gets $infile line] >= 0} {
+    if {[regexp change $line]} {
+      lappend ::ParseFEP::file_lambda $line
     }
   }
   close $infile
   # required for fepdisp_unix
 
+  # nb: The indexing here assumes that all windows in the same direction have
+  # the same sample size. However, there is no assumption here windows in
+  # _different_ directions have the same number of samples (but this assumption
+  # appears to be made elsewhere!).
+  #
   for {set windex 0} {$windex<$::ParseFEP::nb_windows} {incr windex} {
     set fepdata {}
     set fepdata_energy1 {}
@@ -885,28 +906,30 @@ proc ::ParseFEP::normal_parse_log {namdlogfile  fororback} {
     set window [expr {$windex+1}]
     if {$fororback == "forward"} {
       set ntot    [llength $::ParseFEP::fwd_Lsample]
-      set nsample [expr {$ntot/$::ParseFEP::fwd_nb_windows}]
-      set mystart [expr {$windex*$nsample+$::ParseFEP::jstart}]
-      set myend   [expr {($windex+1)*$nsample-1}]
+      set nsample [expr {$ntot / $::ParseFEP::fwd_nb_windows}]
+      set mystart [expr {$windex*$nsample + $::ParseFEP::jstart}]
+      set myend   [expr {($windex + 1)*$nsample - 1}]
       set fepdata [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
       set fepdata_energy1 [lrange $::ParseFEP::fwd_Lsample_energy1 $mystart $myend]
       set fepdata_energy2 [lrange $::ParseFEP::fwd_Lsample_energy2 $mystart $myend]
-      } else {
-        set ntot    [llength $::ParseFEP::bwd_Lsample]
-        set nsample [expr {$ntot/$::ParseFEP::bwd_nb_windows}]
-        set mystart [expr {$windex*$nsample+$::ParseFEP::jstart}]
-        set myend   [expr {($windex+1)*$nsample-1}]
-        set fepdata [lrange $::ParseFEP::bwd_Lsample $mystart $myend]
-        set fepdata_energy1 [lrange $::ParseFEP::bwd_Lsample_energy1 $mystart $myend]
-        set fepdata_energy2 [lrange $::ParseFEP::bwd_Lsample_energy2 $mystart $myend]
-      }
-      set nfepdata [llength $fepdata]
+    } else {
+      set ntot    [llength $::ParseFEP::bwd_Lsample]
+      set nsample [expr {$ntot/$::ParseFEP::bwd_nb_windows}]
+      set mystart [expr {$windex*$nsample + $::ParseFEP::jstart}]
+      set myend   [expr {($windex + 1)*$nsample - 1}]
+      set fepdata [lrange $::ParseFEP::bwd_Lsample $mystart $myend]
+      set fepdata_energy1 [lrange $::ParseFEP::bwd_Lsample_energy1 $mystart $myend]
+      set fepdata_energy2 [lrange $::ParseFEP::bwd_Lsample_energy2 $mystart $myend]
+    }
+    set nfepdata [llength $fepdata]
 
-      set mean_xi [::ParseFEP::analysis_normal_result  $window $fororback $nfepdata $fepdata]
+    set mean_xi [::ParseFEP::analysis_normal_result $window $fororback $nfepdata $fepdata]
 
-      if { $::ParseFEP::gcindex == 1 } {::ParseFEP::Gram_Charlier_analysis  $window $mean_xi $fororback $nfepdata $fepdata}
+    if { $::ParseFEP::gcindex == 1 } {
+      ::ParseFEP::Gram_Charlier_analysis $window $mean_xi $fororback $nfepdata $fepdata
+    }
 
-      ::ParseFEP::FEP_formula $window $mean_xi $fororback $nfepdata $fepdata $fepdata_energy1 $fepdata_energy2
+    ::ParseFEP::FEP_formula $window $mean_xi $fororback $nfepdata $fepdata $fepdata_energy1 $fepdata_energy2
   }
 }
 
@@ -1718,18 +1741,24 @@ proc ::ParseFEP::bar_estimate {} {
     # Letitia: forward data reading from each window
     set data_forward {}
     set ntot [llength $::ParseFEP::fwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
+    set nsample [expr {$ntot / $::ParseFEP::nb_windows}]
     set mystart [expr {$windex*$nsample}]
-    set myend   [expr {$mystart+$nsample-1}]
+    set myend   [expr {$mystart + $nsample - 1}]
     set data_forward [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
     # Letitia: backward data reading from the correspondnig window to forward, and set Delta_U -> -1.*Delta_U.
     set data_backward {}
     set ntot [llength $::ParseFEP::bwd_Lsample]
-    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
-    for {set j 0} {$j<$::ParseFEP::nb_windows} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
+    set nsample [expr {$ntot / $::ParseFEP::nb_windows}]
+    for {set j 0} {$j<$::ParseFEP::nb_windows} {incr j} {
+      if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {
+        set bwd_windex $j
+      }
+    }
     set mystart [expr {$bwd_windex*$nsample}]
-    set myend   [expr {$mystart+$nsample-1}]
-    foreach item [lrange $::ParseFEP::bwd_Lsample $mystart $myend] {lappend data_backward [expr {-1.0*$item}]}
+    set myend   [expr {$mystart + $nsample - 1}]
+    foreach item [lrange $::ParseFEP::bwd_Lsample $mystart $myend] {
+      lappend data_backward [expr {-1.0*$item}]
+    }
 
     # data has already been extracted from the fepout file. the next is to performe the BAR estimate.
     set len_forward  [llength $data_forward]
@@ -1737,30 +1766,27 @@ proc ::ParseFEP::bar_estimate {} {
 
     set instant_accum 0.
 
-    foreach { i_fwd j_fwd k_fwd l_fwd } $elem_fwd {i_bwd j_bwd k_bwd l_bwd } $elem_bwd { break }
+    lassign $elem_fwd i_fwd j_fwd k_fwd l_fwd
+    lassign $elem_bwd i_bwd j_bwd k_bwd l_bwd
 
-    set deltaA_0  [expr   {-1. * $::ParseFEP::kT  * log ( ($l_fwd * 1.0) / (1.0 * $l_bwd)  )}  ]
-
-    set C_0  [ ::ParseFEP::deltaAtoC $deltaA_0 $len_forward $len_backward ]
-
-    set deltaA_1 [ ::ParseFEP::CtodeltaA $C_0 $data_forward $data_backward  $len_forward $len_backward ]
-    set C_1 [ ::ParseFEP::deltaAtoC $deltaA_1 $len_forward $len_backward ]
-
-    while {  abs($deltaA_1 - $deltaA_0 ) > 0.00045   } {
+    set deltaA_0 [expr {-1.*$::ParseFEP::kT*log(($l_fwd*1.0) / (1.0*$l_bwd))}]
+    set C_0 [::ParseFEP::deltaAtoC $deltaA_0 $len_forward $len_backward]
+    set deltaA_1 [::ParseFEP::CtodeltaA $C_0 $data_forward $data_backward $len_forward $len_backward]
+    set C_1 [::ParseFEP::deltaAtoC $deltaA_1 $len_forward $len_backward]
+    while {abs($deltaA_1 - $deltaA_0) > 0.00045} {
       set deltaA_0 $deltaA_1
       set C_0 $C_1
-      set deltaA_1 [ ::ParseFEP::CtodeltaA $C_0 $data_forward $data_backward  $len_forward $len_backward ]
-      set C_1 [ ::ParseFEP::deltaAtoC $deltaA_1 $len_forward $len_backward ]
+      set deltaA_1 [::ParseFEP::CtodeltaA $C_0 $data_forward $data_backward $len_forward $len_backward]
+      set C_1 [::ParseFEP::deltaAtoC $deltaA_1 $len_forward $len_backward]
     }
-
-    set sigma_2_window_now  [ ::ParseFEP::sigma_2_BAR $data_forward $data_backward  $len_forward $len_backward $C_1  $k_fwd $k_bwd  ]
-    set sigma_2_now [expr {$sigma_2_now + $sigma_2_window_now}  ]
+    set sigma_2_window_now [::ParseFEP::sigma_2_BAR $data_forward $data_backward $len_forward $len_backward $C_1 $k_fwd $k_bwd]
+    set sigma_2_now [expr {$sigma_2_now + $sigma_2_window_now}]
 
     lappend A $deltaA_1
     set A_now [expr {$A_now + $deltaA_1}]
 
-    set Dde [expr {sqrt($sigma_2_window_now)} ]
-    set de  [expr {sqrt($sigma_2_now)} ]
+    set Dde [expr {sqrt($sigma_2_window_now)}]
+    set de  [expr {sqrt($sigma_2_now)}]
 
     # Output
     if {$windex==0} {
@@ -1781,14 +1807,13 @@ proc ::ParseFEP::bar_estimate {} {
       puts  "=========================================================================================================================================="
     }
 
-    puts  [format   "BAR-estimator:    %9.5f      %9.5f     %9.4f      %9.4f      %9.4f      %9.4f      %9.4f "  $i    $ideltai   $deltaA_1 $A_now  $C_1  $Dde $de  ]
-    puts $fid  [format   "BAR-estimator:    %9.5f      %9.5f     %9.4f      %9.4f      %9.4f      %9.4f      %9.4f "  $i    $ideltai   $deltaA_1 $A_now  $C_1  $Dde $de ]
-
+    puts [format "BAR-estimator:    %9.5f      %9.5f     %9.4f      %9.4f      %9.4f      %9.4f      %9.4f " $i $ideltai $deltaA_1 $A_now $C_1 $Dde $de]
+    puts $fid [format "BAR-estimator:    %9.5f      %9.5f     %9.4f      %9.4f      %9.4f      %9.4f      %9.4f " $i $ideltai $deltaA_1 $A_now $C_1 $Dde $de]
   }
 
   puts  "=========================================================================================================================================="
   puts "BAR-estimator: total free energy change is $A_now , total error is $de"
-  puts  $fid "BAR-estimator: total free energy change is $A_now , total error is $de"
+  puts $fid "BAR-estimator: total free energy change is $A_now , total error is $de"
   close $fid
 }
 
