@@ -486,11 +486,11 @@ proc readfepout {fepout Label} {
   close $fid
 
   # Assign data according to Label
-  set nequil [expr {$nb_equil - 1}]
-  set nsample [expr {$nb_sample - $nb_equil + 1}]
-  set nwindow $nb_windows
+#  set nequil [expr {$nb_equil - 1}]
+#  set nsample [expr {$nb_sample - $nb_equil + 1}]
 
   ## debug
+  #set nwindow $nb_windows
   #set totalsize [llength $Lsample]
   #set blocksize [expr {$totalsize/$nwindow}]
   #set fd [open "debug.dat" "a+"]
@@ -1236,102 +1236,37 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
   #  COMPUTE CORRELATION LENGTH FOR <exp(-Delta U/kT)>
   #----------------------------------------------------------------------
   set nSample $nfepdata
-
-  if  { [expr $mean_deltaG !=0 ] } {
-
+  if {[expr {$mean_deltaG != 0}]} {
     ##  convert delta_G to boltzmann factor
     set bolt_array ""
     foreach item $fepdata {
-      lappend bolt_array [expr {exp(-1 * $item  / [kT] )} ]
-      }
-
-      set mean_sigma [::ParseFEP::mean_sigma $bolt_array ]
-      foreach { mean_factor sigma_factor }  $mean_sigma  { break }
-
-      ## Sampling ratio for exp(-dV/RT), using block averages
-      set array_var_tau ""
-      set kmax [expr {int ( log ($nSample) / log (2) )} ]
-      if  { [expr 2 ** $kmax]  > $nSample } { incr kmax -1 }
-
-
-      puts  "$fororback:  COMPUTE CORRELATION LENGTH FOR <exp(-\u0394U/kT)> "
-      puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
-      puts  "$fororback:       blocks         samples            \u03c3**2            error               1+2\u03ba"
-      puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
-
-      set k_index ""
-      for {set i $kmax} {$i>0} {incr i -1} {lappend k_index $i}
-
-      foreach k $k_index {
-        # N : size of block averages
-        set N_block [expr {int ( $nSample / ( 2 ** $k ) )} ]
-        # n: number of block
-        set num_block [expr {$nSample/ $N_block} ]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
-        set blockdata [::ParseFEP::block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample]
-        foreach {var Error tau} $blockdata {break}
-        puts [format "$fororback:         %5d      %5d           %2.5f            %2.5f             %2.5f"   $N_block  $num_block  $var  $Error  $tau]
-        lappend array_var_tau $var $tau
-      }
-
-      puts  "$fororback:  -----------------------------------------------------------------------------------------------------"
-      puts  "$fororback:  ParseFEP: Summary of thermodynamic quantities in kcal/mol"
-
-      foreach {t c } {0. 0.} {break }
-      while { $c == 0 } {
-        set t [expr {$t+ 0.001}]
-        set f 0.000001
-        set tmax 0.
-        foreach {var_now tau_now}  $array_var_tau {
-          if {  [ expr $var_now/$f  < $t +1  &&  $var_now / $f > 1 - $t ]  } {
-            set fmin $var_now
-            set tmax $tau_now
-            }
-            set f $var_now
-        }
-        set c $tmax
-      }
-      set kappa  $c
-
-  } else {
-    set kappa 1.0
-  }
-
-  #----------------------------------------------------------------------
-  #  COMPUTE CORRELATION LENGTH FOR <exp(-Delta U/2kT)>
-  #----------------------------------------------------------------------
-  if  { [expr  $mean_deltaG != 0 ] } {
-
-    ##  convert delta_G to boltzmann factor
-    set bolt_array ""
-    foreach item $fepdata {
-      lappend bolt_array [expr  {exp(-1 * $item / 2 / [kT])} ]
+      lappend bolt_array [expr {exp(-1*$item / [kT])}]
     }
-
-    set mean_sigma [::ParseFEP::mean_sigma $bolt_array]
-    foreach {mean_factor sigma_factor} $mean_sigma  { break }
+    lassign [mean_sigma $bolt_array] mean_factor sigma_factor
 
     ## Sampling ratio for exp(-dV/RT), using block averages
-    set array_var_tau ""
+    set kmax [expr {int(log($nSample) / log(2))}]
+    if {[expr {2**$kmax}] > $nSample} {
+      incr kmax -1
+    }
 
-    set kmax [expr {int ( log ($nSample) / log (2) )}  ]
-    if  { [expr 2 ** $kmax]  > $nSample} { incr kmax -1 }
-
-    set k_index ""
-    for {set i $kmax} {$i>0} {incr i -1} {lappend k_index $i}
-
-    puts  "$fororback:    COMPUTE CORRELATION LENGTH FOR <exp(-\u0394U/2kT)>"
+    puts  "$fororback:  COMPUTE CORRELATION LENGTH FOR <exp(-\u0394U/kT)> "
     puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
-    puts  "$fororback:       blocks         samples            \u03c3**2             error               1+2\u03ba"
+    puts  "$fororback:       blocks         samples            \u03c3**2            error               1+2\u03ba"
     puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
 
+    set k_index [list]
+    for {set i $kmax} {$i > 0} {incr i -1} {
+      lappend k_index $i
+    }
+
+    set array_var_tau {}
     foreach k $k_index {
       # N : size of block averages
-      set N_block [expr {int ( $nSample / (2 ** $k) )} ] 
-      # n : number of block
-      set num_block [expr  {$nSample/ $N_block} ]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
-
-      set blockdata [ ::ParseFEP::block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample ]
-      foreach {var Error tau} $blockdata {break}
+      set N_block [expr {int($nSample / (2**$k))}]
+      # n: number of block
+      set num_block [expr {$nSample / $N_block}]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
+      lassign [block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample] var Error tau
 
       puts [format "$fororback:         %5d      %5d           %2.5f            %2.5f             %2.5f"   $N_block  $num_block  $var  $Error  $tau]
       lappend array_var_tau $var $tau
@@ -1340,23 +1275,86 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
     puts  "$fororback:  -----------------------------------------------------------------------------------------------------"
     puts  "$fororback:  ParseFEP: Summary of thermodynamic quantities in kcal/mol"
 
-    foreach {t c } {0. 0.} {break }
-    while { $c == 0 } {
+    set t 0.
+    set c 0.
+    while {$c == 0} {
+      set t [expr {$t + 0.001}]
+      set f 0.000001
+      set tmax 0.
+      foreach {var_now tau_now} $array_var_tau {
+        if {[expr {$var_now/$f}] < [expr {$t + 1}] && [expr {$var_now / $f}] > [expr {1 - $t}]} {
+          set fmin $var_now
+          set tmax $tau_now
+        }
+        set f $var_now
+      }
+      set c $tmax
+    }
+    set kappa $c
+  } else {
+    set kappa 1.0
+  }
+
+  #----------------------------------------------------------------------
+  #  COMPUTE CORRELATION LENGTH FOR <exp(-Delta U/2kT)>
+  #----------------------------------------------------------------------
+  if {[expr {$mean_deltaG != 0}]} {
+
+    ##  convert delta_G to boltzmann factor
+    set bolt_array [list]
+    foreach item $fepdata {
+      lappend bolt_array [expr {exp(-1*$item / (2*[kT]))}]
+    }
+    lassign [mean_sigma $bolt_array] mean_factor sigma_factor
+
+    ## Sampling ratio for exp(-dV/RT), using block averages
+    set array_var_tau ""
+
+    set kmax [expr {int(log($nSample) / log(2))}]
+    if  {[expr {2**$kmax}] > $nSample} {
+      incr kmax -1
+    }
+
+    set k_index [list]
+    for {set i $kmax} {$i > 0} {incr i -1} {
+      lappend k_index $i
+    }
+
+    puts  "$fororback:    COMPUTE CORRELATION LENGTH FOR <exp(-\u0394U/2kT)>"
+    puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
+    puts  "$fororback:       blocks         samples            \u03c3**2             error               1+2\u03ba"
+    puts  "$fororback:  -------------------------------------------------------------------------------------------------------------"
+
+    foreach k $k_index {
+      # N : size of block averages
+      set N_block [expr {int($nSample / (2**$k))}] 
+      # n : number of block
+      set num_block [expr {$nSample / $N_block}]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
+      lassign [block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample] var Error tau
+
+      puts [format "$fororback:         %5d      %5d           %2.5f            %2.5f             %2.5f"   $N_block  $num_block  $var  $Error  $tau]
+      lappend array_var_tau $var $tau
+    }
+
+    puts  "$fororback:  -----------------------------------------------------------------------------------------------------"
+    puts  "$fororback:  ParseFEP: Summary of thermodynamic quantities in kcal/mol"
+
+    set t 0.
+    set c 0.
+    while {$c == 0} {
       set t [expr {$t+ 0.001}]
       set f 0.000001
       set tmax 0.
-
-      foreach {var_now tau_now}  $array_var_tau {
-        if {  [ expr $var_now/$f  < $t +1  &&  $var_now / $f > 1 - $t ]  } {
+      foreach {var_now tau_now} $array_var_tau {
+        if {[expr {$var_now/$f}] < [expr {$t + 1}] && [expr {$var_now / $f}] > [expr {1 - $t}]} {
           set fmin $var_now
           set tmax $tau_now
-          }
-          set f $var_now
-       }
-       set c $tmax
+        }
+        set f $var_now
+      }
+      set c $tmax
     }
-    set kappa2  $c
-
+    set kappa2 $c
   } else {
     set kappa2 1.0
   }
@@ -1367,19 +1365,19 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
   set instant_accum 0.
 
   foreach item $fepdata {
-    set instant_accum [expr {$instant_accum + exp(-1. * $item / [kT])}]
+    set instant_accum [expr {$instant_accum + exp(-1.*$item / [kT])}]
   }
-  set instant_fep_delta_a  [expr  {-1. * [kT] * log(1.0*$instant_accum/$nfepdata)}]
+  set instant_fep_delta_a [expr {-1.*[kT]*log(1.0*$instant_accum / $nfepdata)}]
 
-  if { $fororback == "forward" } {
-    set ::ParseFEP::fep_delta_a_forward [expr {$::ParseFEP::fep_delta_a_forward + $instant_fep_delta_a} ]
+  if {$fororback == "forward"} {
+    set ::ParseFEP::fep_delta_a_forward [expr {$::ParseFEP::fep_delta_a_forward + $instant_fep_delta_a}]
 
     puts "$fororback:            -------------------------------------------"
     puts "$fororback:            \u0394\u0394A (FEP) =  $instant_fep_delta_a     \u0394A (FEP)   = $::ParseFEP::fep_delta_a_forward"
     puts "$fororback:            -------------------------------------------"
 
   } else {
-    set ::ParseFEP::fep_delta_a_backward [expr {$::ParseFEP::fep_delta_a_backward + $instant_fep_delta_a} ]
+    set ::ParseFEP::fep_delta_a_backward [expr {$::ParseFEP::fep_delta_a_backward + $instant_fep_delta_a}]
 
     puts "$fororback:            -------------------------------------------"
     puts "$fororback:            \u0394\u0394A (FEP) =  $instant_fep_delta_a     \u0394A (FEP)   = $::ParseFEP::fep_delta_a_backward"
@@ -1388,20 +1386,17 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
 
 
   # evaluate some more data...(Letita: still don't know them, but code is cleaned.)
-  if { $::ParseFEP::entropyindex == 1 } {
-
-    foreach {s1 s2 s3  n} { 0. 0. 0. 0 } { break }
-    for {set i 0} {$i<$nfepdata} {incr i} {
-      set n [expr {$i+1}]
-      set doller1 [lindex $fepdata_energy1 $i]
-      set doller2 [lindex $fepdata_energy2 $i]
-      set s1 [expr { $s1 * ($n - 1 ) *1.0 / $n + exp ( - ($doller2 - $doller1 ) / [kT] ) * $doller2  * 1.0 / $n }  ]
-      set s2 [expr { $s2 * ($n - 1 ) *1.0 / $n + exp ( - ($doller2 - $doller1 ) / [kT])  * 1.0 / $n } ]
-      set s3 [expr { $s3 * ($n - 1 ) *1.0 / $n + $doller1  * 1.0 / $n }  ]
+  if {$::ParseFEP::entropyindex == 1} {
+    lassign {0. 0. 0. 0} s1 s2 s3 n
+    foreach doller1 $fepdata_energy1 doller2 $fepdata_energy2 {
+      incr n
+      set s1 [expr {($s1*($n - 1) + exp(-($doller2 - $doller1) / [kT])*$doller2) / $n}]
+      set s2 [expr {($s2*($n - 1) + exp(-($doller2 - $doller1) / [kT])) / $n}]
+      set s3 [expr {($s3*($n - 1) + $doller1) / $n}]
     }
 
-    set instant_fep_delta_u [expr  { $s1/$s2 - $s3 } ]
-    set instant_fep_delta_s [expr { $::ParseFEP::temperature * ($::ParseFEP::k *log ( $s2 *1.0  ) + $instant_fep_delta_u / $::ParseFEP::temperature) } ]
+    set instant_fep_delta_u [expr {($s1 / $s2) - $s3}]
+    set instant_fep_delta_s [expr {$instant_fep_delta_u + [kT]*log($s2)}]
     if {$fororback=="forward"} {
       set i [lindex $::ParseFEP::fwd_lambda $windex]
       set ideltai [lindex $::ParseFEP::fwd_lambda2 $windex]
@@ -1411,28 +1406,26 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
     }
 
     if {$fororback=="forward"} {
-      set ::ParseFEP::fep_delta_u_forward [ expr { $::ParseFEP::fep_delta_u_forward + $instant_fep_delta_u}   ]
-      set ::ParseFEP::fep_delta_s_forward [ expr { $::ParseFEP::fep_delta_s_forward + $instant_fep_delta_s}   ]
+      set ::ParseFEP::fep_delta_u_forward [expr {$::ParseFEP::fep_delta_u_forward + $instant_fep_delta_u}]
+      set ::ParseFEP::fep_delta_s_forward [expr {$::ParseFEP::fep_delta_s_forward + $instant_fep_delta_s}]
 
       puts "$fororback:            \u0394\u0394U (FEP) =  $instant_fep_delta_u   \u0394U (FEP)   = $::ParseFEP::fep_delta_u_forward"
       puts "$fororback:            -------------------------------------------"
       puts "$fororback:            \u0394\u0394S (FEP) =  $instant_fep_delta_s   T \u0394S (FEP) = $::ParseFEP::fep_delta_s_forward"
       puts "$fororback:            -------------------------------------------"
-
-    }  else {
-      set ::ParseFEP::fep_delta_u_backward [ expr { $::ParseFEP::fep_delta_u_backward + $instant_fep_delta_u}   ]
-      set ::ParseFEP::fep_delta_s_backward [ expr { $::ParseFEP::fep_delta_s_backward + $instant_fep_delta_s}   ]
+    } else {
+      set ::ParseFEP::fep_delta_u_backward [expr {$::ParseFEP::fep_delta_u_backward + $instant_fep_delta_u}]
+      set ::ParseFEP::fep_delta_s_backward [expr {$::ParseFEP::fep_delta_s_backward + $instant_fep_delta_s}]
 
       puts "$fororback:            \u0394\u0394U (FEP) =  $instant_fep_delta_u   \u0394U (FEP)   = $::ParseFEP::fep_delta_u_backward"
       puts "$fororback:            -------------------------------------------"
       puts "$fororback:            \u0394\u0394S (FEP) =  $instant_fep_delta_s   T \u0394S (FEP) = $::ParseFEP::fep_delta_s_backward"
       puts "$fororback:            -------------------------------------------"
-
     }
 
     # Output entropy.log
-    if {$window==1} {
-      if {$fororback=="forward"} {
+    if {$window == 1} {
+      if {$fororback == "forward"} {
         file delete entropy.log
         set fid [open entropy.log "a+"]
         puts $fid " "
@@ -1442,34 +1435,34 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
         puts $fid "#forward/backward             \u03bb             \u0394\u0394U          \u0394U            \u0394\u0394S             \u0394S"
         puts $fid "#                                                    "
         puts $fid "#-----------------------------------------------------------------------------------------"
-        puts $fid [format "forward:  entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f"  [lindex $::ParseFEP::fwd_lambda 0]  0. 0. 0. 0. ]
+        puts $fid [format "forward:  entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" [lindex $::ParseFEP::fwd_lambda 0] 0. 0. 0. 0.]
         close $fid
-       } else {
-         set fid [open entropy.log "a+"]
-         puts $fid [format "backward: entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f"  [lindex $::ParseFEP::bwd_lambda 0]  0.0     $::ParseFEP::fep_delta_u_forward   0.0  $::ParseFEP::fep_delta_s_forward ]
+      } else {
+        set fid [open entropy.log "a+"]
+        puts $fid [format "backward: entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" [lindex $::ParseFEP::bwd_lambda 0] 0.0 $::ParseFEP::fep_delta_u_forward 0.0 $::ParseFEP::fep_delta_s_forward]
          #::ParseFEP::fep_delta_s_backward is set to $::ParseFEP::fep_delta_s_forward for window==1; ::ParseFEP::fep_delta_u_backward is set to $::ParseFEP::fep_delta_u_forward for window==1
          close $fid
        }
     }
 
-    set fid [open entropy.log "a+" ]
-    if {$fororback=="forward"} {
-      puts $fid [format "forward:  entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" $ideltai  $instant_fep_delta_u  $::ParseFEP::fep_delta_u_forward   $instant_fep_delta_s  $::ParseFEP::fep_delta_s_forward]
+    set fid [open entropy.log "a+"]
+    if {$fororback == "forward"} {
+      puts $fid [format "forward:  entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" $ideltai $instant_fep_delta_u $::ParseFEP::fep_delta_u_forward $instant_fep_delta_s $::ParseFEP::fep_delta_s_forward]
     } else {
-      puts $fid [format "backward: entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" $ideltai  $instant_fep_delta_u  $::ParseFEP::fep_delta_u_backward  $instant_fep_delta_s  $::ParseFEP::fep_delta_s_backward]
+      puts $fid [format "backward: entropy         %8.4f      %8.4f      %8.4f      %8.4f      %8.4f" $ideltai $instant_fep_delta_u $::ParseFEP::fep_delta_u_backward $instant_fep_delta_s $::ParseFEP::fep_delta_s_backward]
     }
     close $fid
   }
 
   puts  "$fororback:   errorFEP: Error estimate from 1-st order perturbation theory:"
 
-  foreach {average_a  average_b  average_c  average_e  average_f} {0.0  0.0  0.0  0.0  0.0} {break}
+  lassign [list 0. 0. 0. 0. 0.] average_a average_b average_c average_e average_f
   foreach item $fepdata {
-    set average_a [expr  {$average_a + exp(-2*$item/[kT])}]
-    set average_b [expr  {$average_b + exp(-1*$item/[kT])}]
-    set average_c [expr  {$average_c + exp(-1*$item/2/[kT])}]
-    set average_e [expr  {$average_e + $item**2}]
-    set average_f [expr  {$average_f + $item}]
+    set average_a [expr {$average_a + exp(-2*$item/[kT])}]
+    set average_b [expr {$average_b + exp(-1*$item/[kT])}]
+    set average_c [expr {$average_c + exp(-1*$item/(2*[kT]))}]
+    set average_e [expr {$average_e + $item**2}]
+    set average_f [expr {$average_f + $item}]
   }
   set average_a [expr {$average_a/$nfepdata}]
   set average_b [expr {$average_b/$nfepdata}]
@@ -1477,58 +1470,56 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
   set average_e [expr {$average_e/$nfepdata}]
   set average_f [expr {$average_f/$nfepdata}]
 
-  set fluctuat_gauss [expr { $average_e - $average_f ** 2} ]
-  set fluctuat   [expr { $average_a - $average_b ** 2} ]
-  set fluctuat2  [expr { $average_b - $average_c ** 2} ]
+  set fluctuat_gauss [expr {$average_e - $average_f**2}]
+  set fluctuat       [expr {$average_a - $average_b**2}]
+  set fluctuat2      [expr {$average_b - $average_c**2}]
 
-  set sampling  [expr {$nfepdata / $kappa} ]
-  set sampling2 [expr {$nfepdata / $kappa2} ]
+  set sampling  [expr {$nfepdata / $kappa}]
+  set sampling2 [expr {$nfepdata / $kappa2}]
 
-  set instant_variance [ expr  { [kT] ** 2 * $fluctuat / $average_b ** 2}  ]
-  set ::ParseFEP::variance [expr { $::ParseFEP::variance + $instant_variance } ]
-  set instant_error [expr { $instant_variance / $sampling } ]
-  set ::ParseFEP::square_error [expr { $::ParseFEP::square_error + $instant_error } ]
-  set instant_error [expr  {sqrt ( $instant_error )} ]
-  set ::ParseFEP::error  [expr  {sqrt ( $::ParseFEP::square_error )} ]
+  set instant_variance         [expr {[kT]**2*$fluctuat / $average_b**2}]
+  set ::ParseFEP::variance     [expr {$::ParseFEP::variance + $instant_variance}]
+  set instant_error            [expr {$instant_variance / $sampling}]
+  set ::ParseFEP::square_error [expr {$::ParseFEP::square_error + $instant_error}]
+  set instant_error            [expr {sqrt($instant_error)}]
+  set ::ParseFEP::error        [expr {sqrt($::ParseFEP::square_error)}]
 
-  puts [format "$fororback:                     kT                                       = %20.6f"     	 [kT] ]
-  puts [format "$fororback:                     1+2\u03ba                                     = %20.6f"    	 $kappa ]
-  puts [format "$fororback:                     N/(1+2\u03ba)                                 = %20.6f"   	 $sampling]
+  puts [format "$fororback:                     kT                                       = %20.6f" [kT]]
+  puts [format "$fororback:                     1+2\u03ba                                     = %20.6f" $kappa]
+  puts [format "$fororback:                     N/(1+2\u03ba)                                 = %20.6f" $sampling]
   puts [format "$fororback:                     <exp(-2\u0394U/kT)>                           = %20.6f" $average_a]
-  puts [format "$fororback:                     <exp(-\u0394U/kT)>                            = %20.6f"  $average_b]
+  puts [format "$fororback:                     <exp(-\u0394U/kT)>                            = %20.6f" $average_b]
   puts [format "$fororback:                     <exp(-\u0394U/2kT) >                          = %20.6f" $average_c]
-  puts [format "$fororback:                     \u03c3**2 = <exp(-2\u0394U/kT)> - <exp(-\u0394U/kT)>**2 = %20.6f" $fluctuat ]
-  puts [format "$fororback:                     \u03c3**2 = <exp(-\u0394U/kT)> - <exp(-\u0394U/2kT)>**2 = %20.6f" $fluctuat2 ]
+  puts [format "$fororback:                     \u03c3**2 = <exp(-2\u0394U/kT)> - <exp(-\u0394U/kT)>**2 = %20.6f" $fluctuat]
+  puts [format "$fororback:                     \u03c3**2 = <exp(-\u0394U/kT)> - <exp(-\u0394U/2kT)>**2 = %20.6f" $fluctuat2]
   puts "$fororback:                     -----------------------------------------------------------"
-  puts [format "$fororback:                     \u0394\u03c3**2                                 = %7.4f"   $instant_variance ]
-  puts [format "$fororback:                     \u03c3**2                                  = %7.4f"    $::ParseFEP::variance ]
-  puts [format "$fororback:                     \u0394\u03b4\u03b5                                   = %7.4f"   $instant_error ]
-  puts [format "$fororback:                     \u03b4\u03b5                                    = %7.4f"    $::ParseFEP::error  ]
+  puts [format "$fororback:                     \u0394\u03c3**2                                 = %7.4f" $instant_variance]
+  puts [format "$fororback:                     \u03c3**2                                  = %7.4f" $::ParseFEP::variance]
+  puts [format "$fororback:                     \u0394\u03b4\u03b5                                   = %7.4f" $instant_error]
+  puts [format "$fororback:                     \u03b4\u03b5                                    = %7.4f" $::ParseFEP::error]
   puts "$fororback:                     -----------------------------------------------------------"
 
   #  GAUSSIAN CASE
   if { $::ParseFEP::gaussian_guess } {
+    set instant_variance_gauss         [expr {exp(2*($instant_fep_delta_a - $average_f) / [kT])*(1.0 + 2.0*$fluctuat_gauss / [kT]**2)}]
+    set instant_variance_gauss         [expr {($instant_variance_gauss - 1.0)*[kT]**2}]
+    set ::ParseFEP::variance_gauss     [expr {$::ParseFEP::variance_gauss + $instant_variance_gauss}]
+    set instant_error_gauss            [expr {$instant_variance_gauss / $sampling}]
+    set ::ParseFEP::square_error_gauss [expr {$::ParseFEP::square_error_gauss + $instant_error_gauss}]
+    set instant_error_gauss            [expr {sqrt(abs($instant_error_gauss))}]
+    set ::ParseFEP::error_gauss        [expr {sqrt(abs($::ParseFEP::square_error_gauss))}]
 
-    set instant_variance_gauss  [expr  {exp(2 * ($instant_fep_delta_a  - $average_f) / [kT] ) * (1.0 + 2.0 * $fluctuat_gauss / [kT] ** 2.0)} ]
-    set instant_variance_gauss  [expr {($instant_variance_gauss - 1.0) * [kT] ** 2.0} ]
-    set ::ParseFEP::variance_gauss  [expr {$::ParseFEP::variance_gauss + $instant_variance_gauss} ]
-    set instant_error_gauss  [expr {$instant_variance_gauss / $sampling} ]
-    set ::ParseFEP::square_error_gauss  [expr {$::ParseFEP::square_error_gauss + $instant_error_gauss} ]
-    set instant_error_gauss  [expr {sqrt(abs($instant_error_gauss))}]
-    set ::ParseFEP::error_gauss  [expr {sqrt(abs($::ParseFEP::square_error_gauss))} ]
-
-    puts [format  "$fororback:                     \u0394\u03c3**2(2nd-order)                      = %7.4f"  $instant_variance_gauss ]
-    puts [format  "$fororback:                     \u03c3**2(2nd-order)                       = %7.4f"  $::ParseFEP::variance_gauss  ]
-    puts [format  "$fororback:                     \u0394\u03b4\u03b5(2nd-order)                        = %7.4f" $instant_error_gauss  ]
-    puts [format  "$fororback:                     \u03b4\u03b5(2nd-order)                         = %7.4f"  $::ParseFEP::error_gauss   ]
+    puts [format  "$fororback:                     \u0394\u03c3**2(2nd-order)                      = %7.4f" $instant_variance_gauss]
+    puts [format  "$fororback:                     \u03c3**2(2nd-order)                       = %7.4f" $::ParseFEP::variance_gauss]
+    puts [format  "$fororback:                     \u0394\u03b4\u03b5(2nd-order)                        = %7.4f" $instant_error_gauss]
+    puts [format  "$fororback:                     \u03b4\u03b5(2nd-order)                         = %7.4f" $::ParseFEP::error_gauss]
     puts "$fororback:                     -----------------------------------------------------------"
-
   }
 
   #----------------------------------------------------------------------
   #  PRINT FREE-ENERGY DIFFERENCES
   #----------------------------------------------------------------------
-  if {$fororback=="forward"} {
+  if {$fororback == "forward"} {
     set lambda [lindex $::ParseFEP::fwd_lambda $windex]
     set lambda_dlambda [lindex $::ParseFEP::fwd_lambda2 $windex]
   } else {
@@ -1536,8 +1527,8 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
     set lambda_dlambda [lindex $::ParseFEP::bwd_lambda2 $windex]
   }
 
-  if {$window==1} {
-    if {$fororback=="forward"} {
+  if {$window == 1} {
+    if {$fororback == "forward"} {
       file delete ParseFEP.log
       set fid [open ParseFEP.log "a+"]
       puts $fid "#========================================================================================"
@@ -1546,26 +1537,26 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
       puts $fid "#forward/backward          \u03BB              \u0394\u0394A                 \u0394A                  \u03b4\u03b5   "
       puts $fid "#                                                 "
       puts $fid "#----------------------------------------------------------------------------------------"
-      puts $fid [ format "forward:            %9.4f           %9.4f           %9.4f           %9.4f  "  [lindex $::ParseFEP::fwd_lambda 0]  0.0 0.0 0.0]
+      puts $fid [format "forward:            %9.4f           %9.4f           %9.4f           %9.4f  " [lindex $::ParseFEP::fwd_lambda 0] 0.0 0.0 0.0]
       close $fid
       # Clean up the old data
       set ::ParseFEP::fwdlog ""
-      } else {
-        set fid [open ParseFEP.log "a+"]
-        puts $fid  [format "backward:           %9.4f           %9.4f           %9.4f           %9.4f  "  [lindex $::ParseFEP::bwd_lambda 0] 0.00 $::ParseFEP::fep_delta_a_forward 0.00 ];
-        # ::ParseFEP::fep_delta_a_backward is set to ::ParseFEP::fep_delta_a_forward for inputs for window==1
-        close $fid
-        # Clean up the old data
-        set ::ParseFEP::bwdlog ""
-      }
+    } else {
+      set fid [open ParseFEP.log "a+"]
+      puts $fid  [format "backward:           %9.4f           %9.4f           %9.4f           %9.4f  " [lindex $::ParseFEP::bwd_lambda 0] 0.00 $::ParseFEP::fep_delta_a_forward 0.00];
+      # ::ParseFEP::fep_delta_a_backward is set to ::ParseFEP::fep_delta_a_forward for inputs for window==1
+      close $fid
+      # Clean up the old data
+      set ::ParseFEP::bwdlog ""
+    }
   }
   set fid [open ParseFEP.log "a+"]
-  if {$fororback=="forward"} {
-    puts $fid  [format "forward:            %9.4f           %9.4f           %9.4f           %9.4f  "  $lambda_dlambda  $instant_fep_delta_a  $::ParseFEP::fep_delta_a_forward  $::ParseFEP::error]
-    lappend ::ParseFEP::fwdlog " $instant_fep_delta_a $::ParseFEP::fep_delta_a_forward  $sampling2 $average_c $fluctuat2 $instant_error $::ParseFEP::error  $lambda $lambda_dlambda"
+  if {$fororback == "forward"} {
+    puts $fid [format "forward:            %9.4f           %9.4f           %9.4f           %9.4f  " $lambda_dlambda $instant_fep_delta_a $::ParseFEP::fep_delta_a_forward $::ParseFEP::error]
+    lappend ::ParseFEP::fwdlog " $instant_fep_delta_a $::ParseFEP::fep_delta_a_forward $sampling2 $average_c $fluctuat2 $instant_error $::ParseFEP::error $lambda $lambda_dlambda"
   } else {
-    puts $fid  [format "backward:           %9.4f           %9.4f           %9.4f           %9.4f  "  $lambda_dlambda  $instant_fep_delta_a  $::ParseFEP::fep_delta_a_backward $::ParseFEP::error]
-    lappend ::ParseFEP::bwdlog "$instant_fep_delta_a $::ParseFEP::fep_delta_a_backward  $sampling2 $average_c $fluctuat2 $instant_error $::ParseFEP::error  $lambda $lambda_dlambda"
+    puts $fid [format "backward:           %9.4f           %9.4f           %9.4f           %9.4f  " $lambda_dlambda $instant_fep_delta_a $::ParseFEP::fep_delta_a_backward $::ParseFEP::error]
+    lappend ::ParseFEP::bwdlog "$instant_fep_delta_a $::ParseFEP::fep_delta_a_backward $sampling2 $average_c $fluctuat2 $instant_error $::ParseFEP::error $lambda $lambda_dlambda"
   }
   close $fid
 }
@@ -1575,133 +1566,103 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
 # Inaccuracy estimation (Letitia: There was a similar bug to the BAR section. Now removed.)
 #############################################################################################
 proc ::ParseFEP::inaccuracy_estimation {} {
-
   for {set windex 0} {$windex < $::ParseFEP::nb_windows} {incr windex} {
-
     set i [lindex $::ParseFEP::fwd_lambda $windex]
     set ideltai [lindex $::ParseFEP::fwd_lambda2 $windex]
 
-    # Letitia: forward data reading from each window
-#    set data_forward {}
-#    set ntot [llength $::ParseFEP::fwd_Lsample]
-#    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
-#    set mystart [expr {$windex*$nsample}]
-#    set myend   [expr {$mystart+$nsample-1}]
-#    set data_forward [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
     lassign [getFwdData $windex] data_forward
-    # Letitia: backward data reading from the correspondnig window to forward, and set Delta_U -> -1.*Delta_U.
-#    set data_backward {}
-#    set ntot [llength $::ParseFEP::bwd_Lsample]
-#    set nsample [expr {$ntot/$::ParseFEP::nb_windows}]
-#    for {set j 0} {$j<$::ParseFEP::nb_windows} {incr j} { if {[lindex $::ParseFEP::fwd_lambda $windex] == [lindex $::ParseFEP::bwd_lambda2 $j]} {set bwd_windex $j}}
-#    set mystart [expr {$bwd_windex*$nsample}]
-#    set myend   [expr {$mystart+$nsample-1}]
-#    foreach item [lrange $::ParseFEP::bwd_Lsample $mystart $myend] {lappend data_backward [expr {-1.0*$item}]}
     lassign [getBwdData $windex] data_backward
 
-    # displaying the histrogram
-    set  nb_data  [llength $data_forward]
-    set  nb_bin   [expr  { int ( sqrt( $nb_data ) ) } ]
+    # displaying the histogram
+    # BKR: A variance based estimator of the bin width might help here,
+    # although I see how that would complicate the overlap computation.
+    set nb_data [llength $data_forward]
+    set nb_bin  [expr {int(sqrt(1.*$nb_data))}]
 
     set min1 999999999999; set max1 -999999999999;
     set min2 999999999999; set max2 -999999999999;
     foreach elem1 $data_forward elem2 $data_backward {
-      if {  $elem1 < $min1   } {  set min1 $elem1 }
-      if {  $elem1 > $max1  } {  set max1 $elem1 }
-      if {  $elem2 < $min2   } {  set min2 $elem2 }
-      if {  $elem2 > $max2  } {  set max2 $elem2 }
+      if {$elem1 < $min1} {set min1 $elem1}
+      if {$elem1 > $max1} {set max1 $elem1}
+      if {$elem2 < $min2} {set min2 $elem2}
+      if {$elem2 > $max2} {set max2 $elem2}
     }
+    set min [expr {$min1 < $min2 ? $min1 : $min2}]
+    set max [expr {$max1 > $max2 ? $max1 : $max2}]
 
-    if { $min1 < $min2    } { set min $min1 } else { set min $min2 }
-    if { $max1  > $max2 } { set max $max1 } else { set max $max2 }
+    set min   [expr {$min - 0.1*sqrt(abs(1.*$min))}]
+    set max   [expr {$max + 0.1*sqrt(abs(1.*$max))}]
+    set delta [expr {($max - $min) / $nb_bin}]
 
-    set min   [ expr { $min - 0.1 * sqrt(sqrt( $min ** 2 )) }  ]
-    set max   [ expr { $max + 0.1 * sqrt(sqrt( $max ** 2  )) } ]
-    set delta [ expr { ( $max- $min ) / $nb_bin }  ]
-
-    set data_list_forward   ""
-    set data_list_backward  ""
-
-    for { set j 0  } { $j <= $nb_bin } { incr j } {
-      lappend data_list_forward   0
-      lappend data_list_backward  0
-    }
-
+    set data_list_forward  [lrepeat [expr {$nb_bin+1}] 0]
+    set data_list_backward [lrepeat [expr {$nb_bin+1}] 0]
     set sum1 0
     foreach elem2 $data_forward {
-      set  index [expr { int (( $elem2  - $min ) / $delta )  } ]
-      set  temp  [lindex   $data_list_forward  $index ]
+      set  index [expr {int(($elem2 - $min) / $delta)}]
+      set  temp  [lindex $data_list_forward $index]
       incr temp
-      set  data_list_forward [lreplace $data_list_forward  $index $index  $temp ]
+      set  data_list_forward [lreplace $data_list_forward $index $index $temp]
       incr sum1
     }
 
     set sum2 0
     foreach elem2 $data_backward {
-      set  index  [expr { int (( $elem2  - $min ) / $delta )  } ]
-      set  temp   [lindex   $data_list_backward  $index ]
+      set  index [expr {int(($elem2 - $min) / $delta)}]
+      set  temp  [lindex $data_list_backward $index]
       incr temp
-      set  data_list_backward [lreplace $data_list_backward  $index $index  $temp ]
+      set  data_list_backward [lreplace $data_list_backward $index $index $temp]
       incr sum2
     }
 
-    set data_combine ""
-    set temp_forward   ""
-    set temp_backward  ""
-
+    set temp_forward  [list]
+    set temp_backward [list]
     foreach elem1 $data_list_forward elem2 $data_list_backward {
-      lappend  temp_forward  [expr { ( $elem1 * 1.0 ) / ( $sum1 * 1.0 )  }]
-      lappend  temp_backward [expr { ( $elem2 * 1.0 ) / ( $sum2 * 1.0 )  }]
+      lappend temp_forward  [expr {($elem1*1.0) / $sum1}]
+      lappend temp_backward [expr {($elem2*1.0) / $sum2}]
     }
-
     set data_list_forward  $temp_forward
     set data_list_backward $temp_backward
 
+    set data_combine [list]
     foreach elem1 $data_list_forward elem2 $data_list_backward {
-      set p_now 0.
-      if { $elem1  > $elem2 } {
-        set p_now $elem1
-       } elseif { $elem1  < $elem2 } {
-         set p_now $elem2
-       } else  {
-         set p_now $elem1
-       }
-       lappend data_combine $p_now
+      lappend data_combine [expr {$elem1 < $elem2 ? $elem2 : $elem1}]
     }
 
     # calculate the overlap degree.
     set accum_sum 0.0
     foreach elem $data_combine {
-      set accum_sum [expr {$accum_sum + $elem} ]
+      set accum_sum [expr {$accum_sum + $elem}]
     }
-
-    set overlap [ expr {100.0 * (2.0 - $accum_sum)} ]
+    set overlap [expr {100.0*(2.0 - $accum_sum)}]
 
     #--------------------------------------------------------------
     # calculation the relative inaccuracy.
-    foreach  {accum_f  accum_f_old  accum_g  accum_g_old} { 0.0  0.0  0.0  0.0} { }
-    foreach  {min_f  max_g  index} { 0 0 0 } { }
-
-    foreach  elem1  $data_list_forward  elem2 $data_list_backward {
-      set accum_f_old  $accum_f
+    lassign [list 0. 0. 0. 0.] accum_f accum_f_old accum_g accum_g_old
+    lassign [list 0 0 0] min_f max_g index
+    foreach elem1 $data_list_forward elem2 $data_list_backward {
+      set accum_f_old $accum_f
       set accum_g_old $accum_g
-      set accum_f  [expr  {$accum_f + $elem1} ]
-      set accum_g  [expr  {$accum_g + $elem2} ]
-      if {  $accum_f  > 0.01  && $accum_f_old < 0.01 }  { set min_f  $index }
-      if {  $accum_g  > 0.99  && $accum_g_old < 0.99 }  { set max_g  $index }
+      set accum_f [expr {$accum_f + $elem1}]
+      set accum_g [expr {$accum_g + $elem2}]
+      if {$accum_f > 0.01 && $accum_f_old < 0.01} {set min_f $index}
+      if {$accum_g > 0.99 && $accum_g_old < 0.99} {set max_g $index}
       incr index
     }
 
-    foreach  { index  f_rela_accu  g_rela_accu } {0  0.0  0.0} { }
-    foreach  elem1  $data_list_forward  elem2 $data_list_backward {
-      if {$index < $min_f } { set f_rela_accu [expr {$f_rela_accu + $elem2 *  ( $min  + $index * $delta )}] }
+    lassign [list 0 0. 0.] index f_rela_accu g_rela_accu
+    foreach elem1 $data_list_forward elem2 $data_list_backward {
+      if {$index < $min_f} {
+        set f_rela_accu [expr {$f_rela_accu + $elem2*($min + $index*$delta)}]
+      }
       incr index
-      if {$index > $max_g } { set g_rela_accu [expr {$g_rela_accu + $elem1 * ( $min + $index * $delta )}] }
+      if {$index > $max_g} {
+        set g_rela_accu [expr {$g_rela_accu + $elem1*($min + $index*$delta)}]
+      }
     }
     #---------------------------------------------------------------
 
     # Output
-    if {$windex==0} {
+    if {$windex == 0} {
       puts "Inaccuracy estimation"
       puts "======================================================================================================"
       puts "             i            i+\u03b4i         P0_overlap_P1   \u03b4\u03b5(forward)/\u03b5   \u03b4\u03b5(backward)/\u03b5 "
@@ -1714,8 +1675,8 @@ proc ::ParseFEP::inaccuracy_estimation {} {
       puts $fid "======================================================================================================"
     }
 
-    puts  [format "inaccuracy:  %7.5f        %7.5f         %7.2f         %7.2f         %7.2f"  $i   $ideltai    $overlap   $f_rela_accu   $g_rela_accu  ]
-    puts $fid [format "inaccuracy:  %7.5f        %7.5f         %7.2f         %7.2f         %7.2f"  $i   $ideltai    $overlap   $f_rela_accu   $g_rela_accu  ]
+    puts [format "inaccuracy:  %7.5f        %7.5f         %7.2f         %7.2f         %7.2f" $i $ideltai $overlap $f_rela_accu $g_rela_accu]
+    puts $fid [format "inaccuracy:  %7.5f        %7.5f         %7.2f         %7.2f         %7.2f" $i $ideltai $overlap $f_rela_accu $g_rela_accu]
   }
   puts "======================================================================================================"
   close $fid
@@ -1736,9 +1697,9 @@ proc ::ParseFEP::sos_estimate {} {
   puts $printmessage
   puts "the free energy estimated by SOS(simple overlap sampling )"
   puts "========================================================================================================================================================="
-  puts  "                        forward                                                 backward                                             SOS"
-  puts  "--------------------------------------------------------------    ------------------------------------------------------   ------------------------------------"
-  puts  "         \u0394\u0394A     \u0394A  n/1+2\u03ba <exp(-\u0394U/2kT)> \u03c3**2    \u0394\u03b4e     \u03b4e      \u0394\u0394A    \u0394A    n/1+2\u03ba <exp(-\u0394U/2kT)> \u03c3**2    \u0394\u03b4e     \u03b4e      \u0394\u0394A     \u0394A     \u0394\u03b4e     \u03b4e "
+  puts "                        forward                                                 backward                                             SOS"
+  puts "--------------------------------------------------------------    ------------------------------------------------------   ------------------------------------"
+  puts "         \u0394\u0394A     \u0394A  n/1+2\u03ba <exp(-\u0394U/2kT)> \u03c3**2    \u0394\u03b4e     \u03b4e      \u0394\u0394A    \u0394A    n/1+2\u03ba <exp(-\u0394U/2kT)> \u03c3**2    \u0394\u03b4e     \u03b4e      \u0394\u0394A     \u0394A     \u0394\u03b4e     \u03b4e "
   puts  "========================================================================================================================================================="
 
   set fid [open ParseFEP.log "a+"]
@@ -1762,32 +1723,35 @@ proc ::ParseFEP::sos_estimate {} {
   set i_bwd_accum 0.
   set n_bwd_accum 0. 
 
-  foreach  elem_fwd  $::ParseFEP::fwdlog elem_bwd $::ParseFEP::bwdlog   {
-    foreach { i_fwd j_fwd k_fwd l_fwd m_fwd n_fwd o_fwd  i ideltai} $elem_fwd {i_bwd j_bwd k_bwd l_bwd m_bwd n_bwd o_bwd} $elem_bwd { break }
-    set dA [expr { -1. * [kT] * log( $l_fwd *1.0 / $l_bwd ) } ]
+  foreach elem_fwd $::ParseFEP::fwdlog elem_bwd $::ParseFEP::bwdlog {
+    lassign $elem_fwd i_fwd j_fwd k_fwd l_fwd m_fwd n_fwd o_fwd i ideltai
+    lassign $elem_bwd i_bwd j_bwd k_bwd l_bwd m_bwd n_bwd o_bwd
+
+    set dA [expr {-[kT]*log($l_fwd*1.0 / $l_bwd)}]
     set A [expr {$A + $dA}]
-    set dV1 [expr {[kT] ** 2.0 / $l_fwd ** 2.0 * $m_fwd}]
-    set dV2 [expr { [kT] ** 2.0 / $l_bwd ** 2.0 * $m_bwd }]
+    set dV1 [expr {[kT]**2 / $l_fwd**2*$m_fwd}]
+    set dV2 [expr {[kT]**2 / $l_bwd**2*$m_bwd}]
     set dE1 [expr {$dV1 / $k_fwd}]
-    set dE2 [expr {$dV2 / $k_bwd }]
-    set dE [expr { $dE1 + $dE2}]
-    set E   [expr {$E + $dE} ]
-    set sigma_dE [expr {sqrt($dE)} ]
-    set sigma_E [expr {sqrt($E)}]
-    set i_bwd [expr {-1. * $i_bwd}]
-    set i_bwd_accum [expr {$i_bwd_accum + $i_bwd + 0.0}       ] ; set j_bwd $i_bwd_accum
-    set n_bwd_accum [expr {$n_bwd_accum + 1.0 * $n_bwd ** 2}  ] ; set o_bwd [expr {sqrt($n_bwd_accum)}]
+    set dE2 [expr {$dV2 / $k_bwd}]
+    set dE  [expr {$dE1 + $dE2}]
+    set E   [expr {$E + $dE}]
+    set sigma_dE [expr {sqrt($dE)}]
+    set sigma_E  [expr {sqrt($E)}]
+    set i_bwd [expr {-$i_bwd}]
+    set i_bwd_accum [expr {$i_bwd_accum + $i_bwd + 0.0}]
+    set j_bwd $i_bwd_accum
+    set n_bwd_accum [expr {$n_bwd_accum + 1.0*$n_bwd**2}]
+    set o_bwd [expr {sqrt($n_bwd_accum)}]
 
-    puts  [format "SOS: %7.2f %7.2f %9.3f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %9.3f %7.2f %7.2f %7.2f %7.2f %7.2f %7.3f %7.4f %7.4f"  $i_fwd $j_fwd $k_fwd $l_fwd $m_fwd $n_fwd $o_fwd $i_bwd $j_bwd $k_bwd $l_bwd $m_bwd $n_bwd $o_bwd $dA $A $sigma_dE $sigma_E]
+    puts [format "SOS: %7.2f %7.2f %9.3f %7.2f %7.2f %7.2f %7.2f %7.2f %7.2f %9.3f %7.2f %7.2f %7.2f %7.2f %7.2f %7.3f %7.4f %7.4f" $i_fwd $j_fwd $k_fwd $l_fwd $m_fwd $n_fwd $o_fwd $i_bwd $j_bwd $k_bwd $l_bwd $m_bwd $n_bwd $o_bwd $dA $A $sigma_dE $sigma_E]
 
-    puts $fid [format   "SOS: %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f"   $i_fwd $j_fwd $k_fwd $l_fwd $m_fwd $n_fwd $o_fwd $i_bwd $j_bwd $k_bwd $l_bwd $m_bwd $n_bwd $o_bwd $dA $A $sigma_dE $sigma_E ]
-
+    puts $fid [format "SOS: %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f %9.4f" $i_fwd $j_fwd $k_fwd $l_fwd $m_fwd $n_fwd $o_fwd $i_bwd $j_bwd $k_bwd $l_bwd $m_bwd $n_bwd $o_bwd $dA $A $sigma_dE $sigma_E]
   }
 
-  puts  $fid  "====================================================================================================================="
-  puts  "========================================================================================================================================================="
+  puts $fid "====================================================================================================================="
+  puts "========================================================================================================================================================="
   puts "SOS-estimator: total free energy change is $A , total error is $sigma_E"
-  puts  $fid "SOS-estimator: total free energy change is $A , total error is $sigma_E"
+  puts $fid "SOS-estimator: total free energy change is $A , total error is $sigma_E"
 
   close $fid
 }
@@ -1822,7 +1786,7 @@ proc ::ParseFEP::bar_estimate {} {
     lassign $elem_fwd i_fwd j_fwd k_fwd l_fwd
     lassign $elem_bwd i_bwd j_bwd k_bwd l_bwd
 
-    set deltaA_0 [expr {-1.*[kT]*log(($l_fwd*1.0) / (1.0*$l_bwd))}]
+    set deltaA_0 [expr {-[kT]*log(($l_fwd*1.0) / (1.0*$l_bwd))}]
     set C_0 [deltaAtoC $deltaA_0 $len_forward $len_backward]
     set deltaA_1 [CtodeltaA $C_0 $data_forward $data_backward $len_forward $len_backward]
     set C_1 [deltaAtoC $deltaA_1 $len_forward $len_backward]
