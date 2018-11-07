@@ -444,11 +444,7 @@ proc readfepout {fepout Label} {
   lappend Lnb_sample $nb_sample
   close $fid
   set nb_windows [expr {$windex+1}];
-  if {[expr $nb_equil] == 1} {
-    set ::ParseFEP::jstart 0
-  } else {
-    set ::ParseFEP::jstart 1
-  }
+  set ::ParseFEP::jstart [expr {$nb_equil == 1 ? 0 : 1}] 
 
   # If sample array size = 0, return with error
   if {[llength $Lsample] < 1} {
@@ -545,45 +541,69 @@ proc ::ParseFEP::kT {} {
 #########################################################
 # Getter functions to avoid redundant indexing code (BKR)
 #########################################################
-proc ::ParseFEP::getFwdData {windex} {
+# Retrieve the energy differences for the given window (retrieved by index).
+# Different conventions are used for two-sided versus one-sided methods and
+# this is toggled by a flag.
+#
+proc ::ParseFEP::getFwdData {windex {useOneSidedConvention 0}} {
   variable ::ParseFEP::fwd_Lsample
   variable ::ParseFEP::fwd_Lsample_energy1
   variable ::ParseFEP::fwd_Lsample_energy2
   variable ::ParseFEP::nb_windows
+  variable ::ParseFEP::jstart
 
   set ntot [llength $fwd_Lsample]
   set nsample [expr {$ntot / $nb_windows}]
-  set mystart [expr {$windex*$nsample}]
-  set myend   [expr {$mystart + $nsample - 1}]
-
+  if {$useOneSidedConvention} {
+    # The purpose of jstart is unclear, but retained for legacy reasons. It was
+    # apparently only ever used in the one-sided FEP pathway.
+    #
+    set mystart [expr {$windex*$nsample + $jstart}]
+    set myend   [expr {$mystart + $nsample - 1 - $jstart}]
+  } else {
+    set mystart [expr {$windex*$nsample}]
+    set myend   [expr {$mystart + $nsample - 1}]
+  }
   set data_forward [lrange $fwd_Lsample $mystart $myend]
   set data_forward_energy1 [lrange $fwd_Lsample_energy1 $mystart $myend]
   set data_forward_energy2 [lrange $fwd_Lsample_energy2 $mystart $myend]
   return [list $data_forward $data_forward_energy1 $data_forward_energy2]
 }
 
-proc ::ParseFEP::getBwdData {windex {flip 1}} {
+proc ::ParseFEP::getBwdData {windex {useOneSidedConvention 0}} {
   variable ::ParseFEP::bwd_Lsample
   variable ::ParseFEP::bwd_Lsample_energy1
   variable ::ParseFEP::bwd_Lsample_energy2
   variable ::ParseFEP::nb_windows
+  variable ::ParseFEP::jstart
   variable ::ParseFEP::fwd_lambda
   variable ::ParseFEP::bwd_lambda2
 
   set ntot [llength $bwd_Lsample]
   set nsample [expr {$ntot / $nb_windows}]
-  for {set j 0} {$j < $nb_windows} {incr j} {
-    if {[lindex $fwd_lambda $windex] == [lindex $bwd_lambda2 $j]} {
-      set bwd_windex $j
+  if {$useOneSidedConvention} {
+    # The purpose of jstart is unclear, but retained for legacy reasons. It was
+    # apparently only ever used in the one-sided FEP pathway.
+    #
+    set mystart [expr {$windex*$nsample + $jstart}]
+    set myend   [expr {$mystart + $nsample - 1 - $jstart}]
+  } else {
+    # We want the backward window whose lambda matches the forward window with
+    # the given windex.
+    #
+    for {set j 0} {$j < $nb_windows} {incr j} {
+      if {[lindex $fwd_lambda $windex] == [lindex $bwd_lambda2 $j]} {
+        set bwd_windex $j
+      }
     }
+    set mystart [expr {$bwd_windex*$nsample}]
+    set myend   [expr {$mystart + $nsample - 1}]
   }
-  set mystart [expr {$bwd_windex*$nsample}]
-  set myend   [expr {$mystart + $nsample - 1}]
-
-  if {$flip} {
-    # Since dE is always computed going towards alchLambda2, it is
-    # often a useful convention to flip the sign so that the energy
-    # differences the in forward and backward directions match.
+  if {!$useOneSidedConvention} {
+    # dE is always computed going towards alchLambda2. By convention, this is
+    # the wrong sign for two-sided methods like BAR, so these are flipped here.
+    #
+    # TODO? It's not clear that this is checked in the input...
     #
     set data_backward [list]
     set data_backward_energy1 [list]
@@ -963,42 +983,20 @@ proc ::ParseFEP::normal_parse_log {namdlogfile fororback} {
   close $infile
   # required for fepdisp_unix
 
-  # nb: The indexing here assumes that all windows in the same direction have
-  # the same sample size. However, there is no assumption here windows in
-  # _different_ directions have the same number of samples (but this assumption
-  # appears to be made elsewhere!).
-  #
-  for {set windex 0} {$windex<$::ParseFEP::nb_windows} {incr windex} {
-    set fepdata {}
-    set fepdata_energy1 {}
-    set fepdata_energy2 {}
-    set window [expr {$windex+1}]
+  for {set windex 0} {$windex < $::ParseFEP::nb_windows} {incr windex} {
+    set window [expr {$windex + 1}]
     if {$fororback == "forward"} {
-      set ntot    [llength $::ParseFEP::fwd_Lsample]
-      set nsample [expr {$ntot / $::ParseFEP::fwd_nb_windows}]
-      set mystart [expr {$windex*$nsample + $::ParseFEP::jstart}]
-      set myend   [expr {($windex + 1)*$nsample - 1}]
-      set fepdata [lrange $::ParseFEP::fwd_Lsample $mystart $myend]
-      set fepdata_energy1 [lrange $::ParseFEP::fwd_Lsample_energy1 $mystart $myend]
-      set fepdata_energy2 [lrange $::ParseFEP::fwd_Lsample_energy2 $mystart $myend]
+      lassign [getFwdData $windex 1] fepdata fepdata_energy1 fepdata_energy2
     } else {
-      set ntot    [llength $::ParseFEP::bwd_Lsample]
-      set nsample [expr {$ntot/$::ParseFEP::bwd_nb_windows}]
-      set mystart [expr {$windex*$nsample + $::ParseFEP::jstart}]
-      set myend   [expr {($windex + 1)*$nsample - 1}]
-      set fepdata [lrange $::ParseFEP::bwd_Lsample $mystart $myend]
-      set fepdata_energy1 [lrange $::ParseFEP::bwd_Lsample_energy1 $mystart $myend]
-      set fepdata_energy2 [lrange $::ParseFEP::bwd_Lsample_energy2 $mystart $myend]
+      lassign [getBwdData $windex 1] fepdata fepdata_energy1 fepdata_energy2
     }
     set nfepdata [llength $fepdata]
 
-    set mean_xi [::ParseFEP::analysis_normal_result $window $fororback $nfepdata $fepdata]
-
-    if { $::ParseFEP::gcindex == 1 } {
-      ::ParseFEP::Gram_Charlier_analysis $window $mean_xi $fororback $nfepdata $fepdata
+    set mean_xi [analysis_normal_result $window $fororback $nfepdata $fepdata]
+    if {$::ParseFEP::gcindex == 1} {
+      Gram_Charlier_analysis $window $mean_xi $fororback $nfepdata $fepdata
     }
-
-    ::ParseFEP::FEP_formula $window $mean_xi $fororback $nfepdata $fepdata $fepdata_energy1 $fepdata_energy2
+    FEP_formula $window $mean_xi $fororback $nfepdata $fepdata $fepdata_energy1 $fepdata_energy2
   }
 }
 
