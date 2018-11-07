@@ -367,102 +367,110 @@ proc ::ParseFEP::reading_para_interfiles {args} {
 # Routine for reading traditional NAMD FEP output file (Letitia)
 ##################################################################
 proc readfepout {fepout Label} {
+  set isForward  [string match -nocase $Label "Forward"]
+  set isBackward [string match -nocase $Label "Backward"]
 
   # Initialization
-  set previous_window 0
-  set windex -1
-  set flag_rdequil 0
-  set flag_rdsample 0
-  set nb_equil 0
-  set nb_sample 0
-  set nb_windows 0
-  set FEPfreq 0
-  set lambda ""
-  set lambda2 ""
-  set Lsample {}
-  set Lsample_energy1 {}
-  set Lsample_energy2 {}
-  set Lnb_equil {}
-  set Lnb_sample {}
-
+  set lambda          [list] ;# list of lambda values in fepout
+  set lambda2         [list] ;# list of comparison values in fepout
+  set Lsample         [list] ;# list of energy differences in fepout
+  set Lsample_energy1 [list] ;# list of ELECT1+VDW1 energies
+  set Lsample_energy2 [list] ;# list of ELECT2+VDW2 energies
+  set Lnb_equil       [list] ;# list of no. of equilibration steps
+  set Lnb_sample      [list] ;# list of no. of samples
 
   # Read NAMD FEP output file
   set fid [open $fepout "r"]
+  set windex -1
+  set flag_rdequil  0
+  set flag_rdsample 0
   while {![eof $fid]} {
     gets $fid data
-    # prepare to go through equilibration data
-    if {[regexp "^#NEW FEP WINDOW" $data]} {
-      if {[llength $data] != 9} {
+    if {[regexp "^#NEW FEP WINDOW" $data]} { ;# This is a new FEP window.
+      incr windex
+      # TODO: IDWS entries will have more than 9 tokens.
+      if {[llength $data] < 9} {
         error "The file $fepout has incorrect format in NEW FEP WINDOW line."
       }
-      if { $previous_window == 1 } {
-        set flag_rdsample 0
-        # nb: ParseFEP reports the number of equilibration samples (nb_equil)
-        # as part of the total sample size (nb_sample), but does not use the
-        # equilibration data for analysis.
-        #
-        set nb_sample [expr {$samindex+$nb_equil-1}]
+      lappend lambda  [expr {1.*[lindex $data 6]}]
+      lappend lambda2 [expr {1.*[lindex $data 8]}]
+      
+      if {$windex > 0} {
+        # Save the sample/equilibration info from the previous window.
+        incr nb_equil ;# BKR - I have no idea why, but this is convention.
+        lappend Lnb_equil  $nb_equil
         lappend Lnb_sample $nb_sample
-      } else {
-        set previous_window 1
       }
-      incr windex 1
-      lappend lambda  [lindex $data 6]
-      lappend lambda2 [lindex $data 8]
-      set flag_rdequil 1
-      set equindex 0
+      # Reset the flags and counters.
+      set flag_rdequil  1
+      set flag_rdsample 0
+      set nb_equil  0
+      set nb_sample 0
       continue
     }
-    # go through equilibration data
-    if {$flag_rdequil} {
+    if {$flag_rdequil} { ;# Look for equilibration entries.
+      # TODO: IDWS also includes the tag "FepE_back"
       if {[regexp "^FepEnergy" $data]} {
-        incr equindex 1
-      } else {
-        set flag_rdequil 0
-        # nb: ParseFEP counts the last frame in nb_equil.
-        set nb_equil [expr {$equindex+1}]
+        # Count, but do not store, equilibration data.
+        incr nb_equil
       }
     }
-    # prepare to read sampling data
-    if {[regexp "^#STARTING COLLECTION" $data]} {
+    if {[regexp "^#STARTING COLLECTION" $data]} { ;# end of equilibration
+      set flag_rdequil  0
       set flag_rdsample 1
-      set samindex 0
-      continue
     }
-    # read sampling data
-    if {$flag_rdsample && [regexp "^FepEnergy" $data]} {
-      # There's no reason to read TS or alchEnsembleAvg fields.
-      lassign [lrange $data 2 end] ELEC1 ELEC2 VDW1 VDW2 dE
-      lappend Lsample $dE
-      lappend Lsample_energy1 [expr {$ELEC1 + $VDW1}]
-      lappend Lsample_energy2 [expr {$ELEC2 + $VDW2}]
-      incr samindex 1
+    if {$flag_rdsample} { ;# Look for sampling entries
+      # TODO: IDWS also includes the tag "FepE_back"
+      if {[regexp "^FepEnergy" $data]} {
+        # There's no reason to read TS or alchEnsembleAvg fields.
+        lassign [lrange $data 2 end] ELEC1 ELEC2 VDW1 VDW2 dE
+        lappend Lsample $dE
+        lappend Lsample_energy1 [expr {$ELEC1 + $VDW1}]
+        lappend Lsample_energy2 [expr {$ELEC2 + $VDW2}]
+        incr nb_sample
+      }
     }
   }
-  # Get number of samples from last window read
-  set nb_sample [expr {$samindex + $nb_equil - 1}]
-  lappend Lnb_sample $nb_sample
   close $fid
-  set nb_windows [expr {$windex+1}];
-  set ::ParseFEP::jstart [expr {$nb_equil == 1 ? 0 : 1}] 
+  # Save the sample/equilibration info from the last window.
+  incr nb_equil ;# BKR - I have no idea why, but this is convention.
+  lappend Lnb_equil  $nb_equil
+  lappend Lnb_sample $nb_sample
 
-  # If sample array size = 0, return with error
-  if {[llength $Lsample] < 1} {
-    error "No sample data in fepout! Check your input files again!"
+  # Sanity check that data was actually read correctly.
+  set nb_windows [expr {$windex + 1}]
+  if {$nb_windows != [llength $Lnb_equil] ||
+      $nb_windows != [llength $Lnb_sample]} {
+    puts "$nb_windows [llength $Lnb_equil] [llength $Lnb_sample]"
+    error "Something went wrong counting the data!"
+  }
+  set ::ParseFEP::jstart [expr {$nb_equil == 1 ? 0 : 1}]
+  foreach nb_sample $Lnb_sample {
+    if {$nb_sample < 1} {
+      error "No sample data in fepout! Check your input files again!"
+    }
+  }
+  # BKR - Another confusing convention. nb_sample is re-defined to include
+  # nb_equil, but without the extra incr call (see above). This also means that
+  # nb_sample is no longer the length of the corresponding segment in Lsample.
+  for {set i 0} {$i < [llength $Lnb_sample]} {incr i} {
+    set nb_sample [lindex $Lnb_sample $i]
+    set nb_equil  [lindex $Lnb_equil $i]
+    lset Lnb_sample $i [expr {$nb_sample + $nb_equil - 1}]
   }
 
-  # Check if one mistype the forward and backward input files
-  if {$Label=="Forward"} {
-    if {[lindex $lambda 0] > [lindex $lambda end]} {
-      error "Error when reading forward fep/fepout: $fepout is NOT a Forward file. Program stops!"
-    }
-  } elseif {$Label=="Backward"} {
-    if {[lindex $lambda 0] < [lindex $lambda end]} {
-      error "Error when reading backward fep/fepout: $fepout is NOT a Backward file. Program stops!"
-    }
+  # Sanity check that lambda values are in proper direction.
+  set firstLambda [lindex $lambda 0]
+  set lastLambda  [lindex $lambda end]
+  if {$isForward && $firstLambda > $lastLambda} {
+    error "Error when reading forward fep/fepout: $fepout is NOT a Forward file. Program stops!"
+  } elseif {$isBackward && $firstLambda < $lastLambda} {
+    error "Error when reading backward fep/fepout: $fepout is NOT a Backward file. Program stops!"
   }
 
   # Evaluate FEPfreq
+  # BKR - there has to be a better way to do this...
+  set FEPfreq 0
   set fid [open $fepout "r"]
   while {![eof $fid]} {
     gets $fid data
@@ -481,22 +489,27 @@ proc readfepout {fepout Label} {
   }
   close $fid
 
-  # Assign data according to Label
-#  set nequil [expr {$nb_equil - 1}]
-#  set nsample [expr {$nb_sample - $nb_equil + 1}]
+  # BKR - It was always implicitly assumed here that nb_equil and nb_sample are
+  # the same in _all_ windows as they are in the _last_ window. Now we just
+  # make that assumption explicit and add an error check.
+  #
+  # THIS MAY CAUSE INPUTS TO CRASH THAT DID NOT IN THE PAST!
+  #
+  set nb_equil  [lindex $Lnb_equil end]
+  set nb_sample [lindex $Lnb_sample end]
+  set window 1
+  foreach mynb_equil [lrange $Lnb_equil 0 end-1]\
+          mynb_sample [lrange $Lnb_sample 0 end-1] {
+    if {$mynb_equil != $nb_equil} {
+      error "Mismatch in no. of equilibration steps in window $window ($mynb_equil != $nb_equil)"
+    }
+    if {$mynb_sample != $nb_sample} {
+      error "Mismatch in no. of samples in window $window ($mynb_sample != $nb_sample)"
+    }
+    incr window
+  }
 
-  ## debug
-  #set nwindow $nb_windows
-  #set totalsize [llength $Lsample]
-  #set blocksize [expr {$totalsize/$nwindow}]
-  #set fd [open "debug.dat" "a+"]
-  #for {set i 0} {$i < $nwindow} {incr i} {
-  #   set initblock [expr {$i*$blocksize}]
-  #   puts $fd "$Label [lindex $lambda $i] [lindex $lambda2 $i] [lindex $Lsample $initblock]"
-  #}
-  #close $fd
-
-  if {$Label=="Forward"} {
+  if {$isForward} {
     set ::ParseFEP::fwd_nb_equil $nb_equil
     set ::ParseFEP::fwd_nb_sample $nb_sample
     set ::ParseFEP::fwd_nb_windows $nb_windows
@@ -506,7 +519,7 @@ proc readfepout {fepout Label} {
     set ::ParseFEP::fwd_Lsample $Lsample
     set ::ParseFEP::fwd_Lsample_energy1 $Lsample_energy1
     set ::ParseFEP::fwd_Lsample_energy2 $Lsample_energy2
-  } elseif {$Label=="Backward"} {
+  } elseif {$isBackward} {
     set ::ParseFEP::bwd_nb_equil $nb_equil
     set ::ParseFEP::bwd_nb_sample $nb_sample
     set ::ParseFEP::bwd_nb_windows $nb_windows
@@ -524,6 +537,8 @@ proc readfepout {fepout Label} {
   }
   unset lambda
   unset lambda2
+  unset Lnb_equil
+  unset Lnb_sample
   unset Lsample
   unset Lsample_energy1
   unset Lsample_energy2
