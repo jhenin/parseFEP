@@ -373,19 +373,21 @@ proc readfepout {fepout Label} {
   set isBackward [string match -nocase $Label "Backward"]
 
   # Initialization
-  set lambda          [list] ;# list of lambda values in fepout
-  set lambda2         [list] ;# list of comparison values in fepout
-  set Lsample         [list] ;# list of energy differences in fepout
-  set Lsample_energy1 [list] ;# list of ELECT1+VDW1 energies
-  set Lsample_energy2 [list] ;# list of ELECT2+VDW2 energies
-  set Lnb_equil       [list] ;# list of no. of equilibration steps
-  set Lnb_sample      [list] ;# list of no. of samples
+  set lambda              [list] ;# list of lambda values in fepout
+  set lambda2             [list] ;# list of comparison values in fepout
+  set Lsample             [list] ;# list of energy differences in fepout
+  set Lsample_tmp         [list]
+  set Lsample_energy1     [list] ;# list of ELECT1+VDW1 energies
+  set Lsample_energy1_tmp [list]
+  set Lsample_energy2     [list] ;# list of ELECT2+VDW2 energies
+  set Lsample_energy2_tmp [list]
+  set Lnb_equil           [list] ;# list of no. of equilibration steps
+  set Lnb_sample          [list] ;# list of no. of samples
 
   # Read NAMD FEP output file
   set fid [open $fepout "r"]
   set windex -1
-  set flag_rdequil  0
-  set flag_rdsample 0
+  set flag_rdequil  1
   while {![eof $fid]} {
     gets $fid data
     if {[regexp "^#NEW FEP WINDOW" $data]} { ;# This is a new FEP window.
@@ -399,43 +401,58 @@ proc readfepout {fepout Label} {
       
       if {$windex > 0} {
         # Save the sample/equilibration info from the previous window.
+        if {$flag_rdequil} { ;# This happens if alchEquilSteps = 0.
+          set nb_equil 0
+        }
         lappend Lnb_equil  $nb_equil
         lappend Lnb_sample $nb_sample
+        set Lsample [concat $Lsample $Lsample_tmp]
+        set Lsample_energy1 [concat $Lsample_energy1 $Lsample_energy1_tmp]
+        set Lsample_energy2 [concat $Lsample_energy2 $Lsample_energy2_tmp]
       }
       # Reset the flags and counters.
       set flag_rdequil  1
-      set flag_rdsample 0
       set nb_equil  0
       set nb_sample 0
+      set Lsample_tmp [list]
+      set Lsample_energy1_tmp [list]
+      set Lsample_energy2_tmp [list]
       continue
     }
-    if {$flag_rdequil} { ;# Look for equilibration entries.
-      # TODO: IDWS also includes the tag "FepE_back"
-      if {[regexp "^FepEnergy" $data]} {
-        # Count, but do not store, equilibration data.
-        incr nb_equil
-      }
+    # Older versions of the code assumed equilibration occurs, which is NOT
+    # required by NAMD. We now just start reading data and start over if we
+    # find the flag for the end of equilibration. The tmp buffers are then
+    # concatenated onto the aggregate sample similar to the sample sizes.
+    #
+    # TODO: IDWS also includes the tag "FepE_back"
+    if {[regexp "^FepEnergy" $data]} {
+      # There's no reason to read TS or alchEnsembleAvg fields.
+      lassign [lrange $data 2 end] ELEC1 ELEC2 VDW1 VDW2 dE
+      lappend Lsample_tmp $dE
+      lappend Lsample_energy1_tmp [expr {$ELEC1 + $VDW1}]
+      lappend Lsample_energy2_tmp [expr {$ELEC2 + $VDW2}]
+      incr nb_equil $flag_rdequil
+      incr nb_sample
     }
     if {[regexp "^#STARTING COLLECTION" $data]} { ;# end of equilibration
-      set flag_rdequil  0
-      set flag_rdsample 1
-    }
-    if {$flag_rdsample} { ;# Look for sampling entries
-      # TODO: IDWS also includes the tag "FepE_back"
-      if {[regexp "^FepEnergy" $data]} {
-        # There's no reason to read TS or alchEnsembleAvg fields.
-        lassign [lrange $data 2 end] ELEC1 ELEC2 VDW1 VDW2 dE
-        lappend Lsample $dE
-        lappend Lsample_energy1 [expr {$ELEC1 + $VDW1}]
-        lappend Lsample_energy2 [expr {$ELEC2 + $VDW2}]
-        incr nb_sample
-      }
+      # Reset sample collection and stop recording equilibration.
+      set flag_rdequil 0 ;# stop counting equilibratin
+      set nb_sample 0    ;# reset the counter to ignore equilibration
+      set Lsample_tmp [list]
+      set Lsample_energy1_tmp [list]
+      set Lsample_energy2_tmp [list]
     }
   }
   close $fid
   # Save the sample/equilibration info from the last window.
+  if {$flag_rdequil} { ;# This happens if alchEquilSteps = 0. 
+    set nb_equil 0
+  }
   lappend Lnb_equil  $nb_equil
   lappend Lnb_sample $nb_sample
+  set Lsample [concat $Lsample $Lsample_tmp]
+  set Lsample_energy1 [concat $Lsample_energy1 $Lsample_energy1_tmp]
+  set Lsample_energy2 [concat $Lsample_energy2 $Lsample_energy2_tmp]
 
   # Sanity check that data was actually read correctly.
   set nb_windows [expr {$windex + 1}]
@@ -520,8 +537,11 @@ proc readfepout {fepout Label} {
   unset Lnb_equil
   unset Lnb_sample
   unset Lsample
+  unset Lsample_tmp
   unset Lsample_energy1
+  unset Lsample_energy1_tmp
   unset Lsample_energy2
+  unset Lsample_energy2_tmp
 }
 
 
