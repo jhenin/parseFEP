@@ -80,6 +80,8 @@ namespace eval ::ParseFEP:: {
   variable bwdlog        ""
   variable overlap_array ""
   variable file_lambda
+  # BKR - temporary flag to shutoff code when this is not true.
+  variable uniformSampleSize
   # Data (Letitia)
   variable jstart
   variable fwd_nb_windows
@@ -397,7 +399,6 @@ proc readfepout {fepout Label} {
       
       if {$windex > 0} {
         # Save the sample/equilibration info from the previous window.
-        incr nb_equil ;# BKR - I have no idea why, but this is convention.
         lappend Lnb_equil  $nb_equil
         lappend Lnb_sample $nb_sample
       }
@@ -433,7 +434,6 @@ proc readfepout {fepout Label} {
   }
   close $fid
   # Save the sample/equilibration info from the last window.
-  incr nb_equil ;# BKR - I have no idea why, but this is convention.
   lappend Lnb_equil  $nb_equil
   lappend Lnb_sample $nb_sample
 
@@ -444,19 +444,15 @@ proc readfepout {fepout Label} {
     puts "$nb_windows [llength $Lnb_equil] [llength $Lnb_sample]"
     error "Something went wrong counting the data!"
   }
-  set ::ParseFEP::jstart [expr {$nb_equil == 1 ? 0 : 1}]
+  # BKR - nobody really knows why this is checked and stored...
+  #       My guess is that it used to be a hack correction to inclusive
+  #       indexing when using lrange when exclusive indexing was expected.
+  #
+  set ::ParseFEP::jstart [expr {$nb_equil == 0 ? 0 : 1}]
   foreach nb_sample $Lnb_sample {
     if {$nb_sample < 1} {
       error "No sample data in fepout! Check your input files again!"
     }
-  }
-  # BKR - Another confusing convention. nb_sample is re-defined to include
-  # nb_equil, but without the extra incr call (see above). This also means that
-  # nb_sample is no longer the length of the corresponding segment in Lsample.
-  for {set i 0} {$i < [llength $Lnb_sample]} {incr i} {
-    set nb_sample [lindex $Lnb_sample $i]
-    set nb_equil  [lindex $Lnb_equil $i]
-    lset Lnb_sample $i [expr {$nb_sample + $nb_equil - 1}]
   }
 
   # Sanity check that lambda values are in proper direction.
@@ -489,29 +485,9 @@ proc readfepout {fepout Label} {
   }
   close $fid
 
-  # BKR - It was always implicitly assumed here that nb_equil and nb_sample are
-  # the same in _all_ windows as they are in the _last_ window. Now we just
-  # make that assumption explicit and add an error check.
-  #
-  # THIS MAY CAUSE INPUTS TO CRASH THAT DID NOT IN THE PAST!
-  #
-  set nb_equil  [lindex $Lnb_equil end]
-  set nb_sample [lindex $Lnb_sample end]
-  set window 1
-  foreach mynb_equil [lrange $Lnb_equil 0 end-1]\
-          mynb_sample [lrange $Lnb_sample 0 end-1] {
-    if {$mynb_equil != $nb_equil} {
-      error "Mismatch in no. of equilibration steps in window $window ($mynb_equil != $nb_equil)"
-    }
-    if {$mynb_sample != $nb_sample} {
-      error "Mismatch in no. of samples in window $window ($mynb_sample != $nb_sample)"
-    }
-    incr window
-  }
-
   if {$isForward} {
-    set ::ParseFEP::fwd_nb_equil $nb_equil
-    set ::ParseFEP::fwd_nb_sample $nb_sample
+    set ::ParseFEP::fwd_nb_equil [lindex $Lnb_equil end]
+    set ::ParseFEP::fwd_nb_sample [lindex $Lnb_sample end]
     set ::ParseFEP::fwd_nb_windows $nb_windows
     set ::ParseFEP::fwd_FEPfreq $FEPfreq
     set ::ParseFEP::fwd_lambda $lambda
@@ -519,9 +495,11 @@ proc readfepout {fepout Label} {
     set ::ParseFEP::fwd_Lsample $Lsample
     set ::ParseFEP::fwd_Lsample_energy1 $Lsample_energy1
     set ::ParseFEP::fwd_Lsample_energy2 $Lsample_energy2
+    set ::ParseFEP::fwd_Lnb_sample $Lnb_sample
+    set ::ParseFEP::fwd_Lnb_equil $Lnb_equil
   } elseif {$isBackward} {
-    set ::ParseFEP::bwd_nb_equil $nb_equil
-    set ::ParseFEP::bwd_nb_sample $nb_sample
+#    set ::ParseFEP::bwd_nb_equil $nb_equil ;# This is never used anywhere
+#    set ::ParseFEP::bwd_nb_sample $nb_sample ;# This is never used anywhere
     set ::ParseFEP::bwd_nb_windows $nb_windows
     set ::ParseFEP::bwd_FEPfreq $FEPfreq
     set ::ParseFEP::bwd_lambda $lambda
@@ -529,6 +507,8 @@ proc readfepout {fepout Label} {
     set ::ParseFEP::bwd_Lsample $Lsample
     set ::ParseFEP::bwd_Lsample_energy1 $Lsample_energy1
     set ::ParseFEP::bwd_Lsample_energy2 $Lsample_energy2
+    set ::ParseFEP::bwd_Lnb_sample $Lnb_sample
+    set ::ParseFEP::bwd_Lnb_equil $Lnb_equil
   } else {
     puts " "
     puts "Error when parsing" $Label "file. Program stops!"
@@ -564,20 +544,21 @@ proc ::ParseFEP::getFwdData {windex {useOneSidedConvention 0}} {
   variable ::ParseFEP::fwd_Lsample
   variable ::ParseFEP::fwd_Lsample_energy1
   variable ::ParseFEP::fwd_Lsample_energy2
-  variable ::ParseFEP::nb_windows
+  variable ::ParseFEP::fwd_Lnb_sample
+  variable ::ParseFEP::fwd_Lnb_equil
   variable ::ParseFEP::jstart
 
-  set ntot [llength $fwd_Lsample]
-  set nsample [expr {$ntot / $nb_windows}]
+  set mystart 0
+  foreach nb_sample [lrange $fwd_Lnb_sample 0 [expr {$windex - 1}]] {
+    incr mystart $nb_sample
+  }
+  set nb_sample [lindex $fwd_Lnb_sample $windex]
+  set myend [expr {$mystart + $nb_sample - 1}]
   if {$useOneSidedConvention} {
     # The purpose of jstart is unclear, but retained for legacy reasons. It was
     # apparently only ever used in the one-sided FEP pathway.
     #
-    set mystart [expr {$windex*$nsample + $jstart}]
-    set myend   [expr {$mystart + $nsample - 1 - $jstart}]
-  } else {
-    set mystart [expr {$windex*$nsample}]
-    set myend   [expr {$mystart + $nsample - 1}]
+    incr mystart $jstart
   }
   set data_forward [lrange $fwd_Lsample $mystart $myend]
   set data_forward_energy1 [lrange $fwd_Lsample_energy1 $mystart $myend]
@@ -589,30 +570,37 @@ proc ::ParseFEP::getBwdData {windex {useOneSidedConvention 0}} {
   variable ::ParseFEP::bwd_Lsample
   variable ::ParseFEP::bwd_Lsample_energy1
   variable ::ParseFEP::bwd_Lsample_energy2
-  variable ::ParseFEP::nb_windows
+  variable ::ParseFEP::bwd_Lnb_sample
+  variable ::ParseFEP::bwd_Lnb_equil
   variable ::ParseFEP::jstart
   variable ::ParseFEP::fwd_lambda
   variable ::ParseFEP::bwd_lambda2
 
-  set ntot [llength $bwd_Lsample]
-  set nsample [expr {$ntot / $nb_windows}]
+  if {$useOneSidedConvention} {
+    set bwd_windex $windex
+  } else {
+    # Convert windex to the backward index with the matching lambda.
+    set bwd_windex 0
+    set lambda [lindex $fwd_lambda $windex]
+    foreach lambda2 $bwd_lambda2 {
+      if {$lambda2 == $lambda} {
+        break
+      }
+      incr bwd_windex
+    }
+  }
+
+  set mystart 0
+  foreach nb_sample [lrange $bwd_Lnb_sample 0 [expr {$bwd_windex - 1}]] {
+    incr mystart $nb_sample
+  }
+  set nb_sample [lindex $bwd_Lnb_sample $bwd_windex]
+  set myend [expr {$mystart + $nb_sample - 1}]
   if {$useOneSidedConvention} {
     # The purpose of jstart is unclear, but retained for legacy reasons. It was
     # apparently only ever used in the one-sided FEP pathway.
     #
-    set mystart [expr {$windex*$nsample + $jstart}]
-    set myend   [expr {$mystart + $nsample - 1 - $jstart}]
-  } else {
-    # We want the backward window whose lambda matches the forward window with
-    # the given windex.
-    #
-    for {set j 0} {$j < $nb_windows} {incr j} {
-      if {[lindex $fwd_lambda $windex] == [lindex $bwd_lambda2 $j]} {
-        set bwd_windex $j
-      }
-    }
-    set mystart [expr {$bwd_windex*$nsample}]
-    set myend   [expr {$mystart + $nsample - 1}]
+    incr mystart $jstart
   }
   if {!$useOneSidedConvention} {
     # dE is always computed going towards alchLambda2. By convention, this is
@@ -926,20 +914,60 @@ proc ::ParseFEP::namdparse {  } {
     if  { $::ParseFEP::fepbofile != "" } {readfepout $::ParseFEP::fepbofile "Backward"}
   }
 
-  # Assign data before we rename them all
+  # BKR - If needed, permit output for variable sample size. For sanity, still
+  # use the old sample size convention, which adds 1 to the equilibration
+  # size. Note also that nb_sample only includes nb_equil when it is reported.
+  # Elsewhere, it specifically means the length of the appropriate segment in
+  # Lsample.
+  #
+  variable ::ParseFEP::uniformSampleSize
+  variable ::ParseFEP::fwd_Lnb_equil
+  variable ::ParseFEP::fwd_Lnb_sample
+  variable ::ParseFEP::bwd_Lnb_equil
+  variable ::ParseFEP::bwd_Lnb_sample
+
+  set nb_equil  [lindex $fwd_Lnb_equil end]
+  set nb_sample [lindex $fwd_Lnb_sample end]
+  set uniformSampleSize 1
+  foreach fwd_nb_equil  [lrange $fwd_Lnb_equil  0 end-1]\
+          fwd_nb_sample [lrange $fwd_Lnb_sample 0 end-1]\
+          bwd_nb_equil  [lrange $bwd_Lnb_equil  0 end-1]\
+          bwd_nb_sample [lrange $bwd_Lnb_sample 0 end-1] {
+    if {$fwd_nb_equil  != $nb_equil  || $bwd_nb_equil  != $nb_equil ||
+        $fwd_nb_sample != $nb_sample || $bwd_nb_sample != $nb_sample} {
+      set uniformSampleSize 0
+      break
+    }
+  }
+
+  set nb_equil  [expr {[lindex $fwd_Lnb_equil end] + 1}]
+  set nb_sample [expr {[lindex $fwd_Lnb_sample end] + $nb_equil - 1}]
+
+  # TODO: Remove this and its dependencies in the GUI.
   set ::ParseFEP::nb_windows $::ParseFEP::fwd_nb_windows
   set ::ParseFEP::FEPfreq $::ParseFEP::fwd_FEPfreq
-  set ::ParseFEP::nb_sample $::ParseFEP::fwd_nb_sample
-  set ::ParseFEP::nb_equil $::ParseFEP::fwd_nb_equil
-
-  # Update the parameter (Letitia: Previously lots of calculations are done using ::ParseFEP::kT, which is never updated for T!=300)
-#  set ::ParseFEP::kT [expr {$::ParseFEP::k * $::ParseFEP::temperature}]
+  set ::ParseFEP::nb_sample $nb_sample
+  set ::ParseFEP::nb_equil $nb_equil
 
   puts "ParseFEP: Get the number of samples per window"
   puts "ParseFEP: Split time-series in $::ParseFEP::fwd_nb_windows files"
   puts "ParseFEP: $::ParseFEP::fwd_FEPfreq steps between stored samples"
-  puts "ParseFEP: $::ParseFEP::fwd_nb_sample effective samples per windows"
-  puts "ParseFEP: $::ParseFEP::fwd_nb_equil effective equilibration steps per window"
+  if {$uniformSampleSize} {
+    puts "ParseFEP: $nb_sample effective samples per windows"
+    puts "ParseFEP: $nb_equil effective equilibration steps per window"
+  } else {
+    puts "ParseFEP: effective samples/equilibration steps per window:"
+    puts "ParseFEP: [format "%17s %17s" "forward" "backward"]"
+    puts "ParseFEP: [format "%8s %8s %8s %8s" "equil." "sample" "equil." "sample"]"
+    foreach fwd_nb_equil $fwd_Lnb_equil fwd_nb_sample $fwd_Lnb_sample \
+            bwd_nb_equil $bwd_Lnb_equil bwd_nb_sample $bwd_Lnb_sample {
+      incr fwd_nb_sample $fwd_nb_equil
+      incr bwd_nb_sample $bwd_nb_equil
+      incr fwd_nb_equil
+      incr bwd_nb_equil
+      puts "ParseFEP: [format "%8d %8d %8d %8d" $fwd_nb_equil $fwd_nb_sample $bwd_nb_equil $bwd_nb_sample]"
+    }
+  }
   puts "ParseFEP: Parse time-series"
 
   # Normal analysis
@@ -1206,7 +1234,7 @@ proc ::ParseFEP::block_sigma {mean sigma size_block  num_block  F_array nSample}
     incr index_block
     set Fav_accum  [expr { $F_i + $Fav_accum } ]
     if { [expr { $index_block == $size_block } ] } {
-      set sigma_factor_accum [ expr   { ( $Fav_accum / $size_block  -  $mean ) ** 2.0+ $sigma_factor_accum }   ]
+      set sigma_factor_accum [ expr   { ( 1.*$Fav_accum / $size_block  -  $mean )**2 + $sigma_factor_accum }   ]
       set Fav_accum 0
       set index_block  0
     }
@@ -1216,7 +1244,7 @@ proc ::ParseFEP::block_sigma {mean sigma size_block  num_block  F_array nSample}
   set Error [expr {$var * sqrt( 2.0 ) / sqrt($num_block - 1.)} ]; #Why is the error defined as such?
   set tau [expr  {$nSample * $var / ($sigma ** 2)} ]
 
-  return "$var $Error $tau"
+  return [list $var $Error $tau]
 }
 
 # Evaluate mean and sigma of a list of data
@@ -1276,7 +1304,7 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
     set array_var_tau {}
     foreach k $k_index {
       # N : size of block averages
-      set N_block [expr {int($nSample / (2**$k))}]
+      set N_block [expr {int(1.*$nSample / (2**$k))}]
       # n: number of block
       set num_block [expr {$nSample / $N_block}]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
       lassign [block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample] var Error tau
@@ -1340,7 +1368,7 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
 
     foreach k $k_index {
       # N : size of block averages
-      set N_block [expr {int($nSample / (2**$k))}] 
+      set N_block [expr {int(1.*$nSample / (2**$k))}] 
       # n : number of block
       set num_block [expr {$nSample / $N_block}]  ;# caution:   int( ) has been performed. nSample, N_block are integer.
       lassign [block_sigma $mean_factor $sigma_factor $N_block $num_block $bolt_array $nSample] var Error tau
@@ -1579,6 +1607,11 @@ proc ::ParseFEP::FEP_formula {window mean_deltaG fororback nfepdata fepdata fepd
 # Inaccuracy estimation (Letitia: There was a similar bug to the BAR section. Now removed.)
 #############################################################################################
 proc ::ParseFEP::inaccuracy_estimation {} {
+  if {!$::ParseFEP::uniformSampleSize} {
+    puts "Inaccuracy estimation is current incompatible with non-uniform sample size."
+    return
+  }
+
   for {set windex 0} {$windex < $::ParseFEP::nb_windows} {incr windex} {
     set i [lindex $::ParseFEP::fwd_lambda $windex]
     set ideltai [lindex $::ParseFEP::fwd_lambda2 $windex]
