@@ -33,7 +33,7 @@
 #######################################################################
 
 
-package provide parsefep 2.1
+package provide parsefep 2.2
 
 namespace eval ::ParseFEP:: {
   if { [catch {package require exectool 1.2}] } {
@@ -44,7 +44,7 @@ namespace eval ::ParseFEP:: {
   namespace export parsefepgui
   namespace export parsefep
   variable w
-  variable version         2.1
+  variable version         2.2
   variable temperature     300.0
   variable gcindex         0
   variable max_order       ""
@@ -2203,8 +2203,16 @@ proc ::ParseFEP::fepdisp_unix { } {
                     incr j
                     set i [expr {  ( $j + 0.5 ) * $delta + $min } ]
                     if { [expr   $elem / $sum * 1.0  > 0.00049   ] } {
-                      puts  $temp_file [format "%15.4f %15.4f %25.4f %25.4f" $i  [expr { $elem / $sum * 1.0  }] [expr { exp (  - 1.987* $::ParseFEP::temperature /1000 * $i)  } ] [expr { $elem / $sum * exp (  - 1.987* $::ParseFEP::temperature /1000 * $i)} ] ]
-                      }
+                      puts  $temp_file [format "%15.4f %15.4f %25.4f %25.4f" $i \
+                          [expr { $elem / $sum * 1.0  }] \
+                          [expr { exp (  - 1.987* $::ParseFEP::temperature /1000 * $i)  } ] \
+                          [expr { $elem / $sum * exp (  - 1.987* $::ParseFEP::temperature /1000 * $i)} ] ]
+                   } else {
+                     # large negative energy difference lead to domain error (apparently 0 * Inf)
+                     set LARGE 10000
+                     puts  $temp_file [format "%15.4f %15.4f %25.4f %25.4f" $i \
+                          [expr { $elem / $sum * 1.0  }] $LARGE $LARGE ]
+                   }
                   }
 
                   close $temp_file
@@ -2685,8 +2693,14 @@ proc ::ParseFEP::fepdisp_unix { } {
           ####################################################
 
           set infile [open [format "file%d.dat.hist"     $file_index ]  "r"]
-          set size [file size  [format "file%d.dat.rev.hist" $file_index ]  ]
+          # JH 2020-04-10 Why is the size taken from the reverse file below? Fixed
+          set size [file size  [format "file%d.dat.hist" $file_index ]  ]
           set data_file [split [read $infile $size ] "\n" ]
+
+          if {[llength $data_file] == 0} {
+            puts "Error: no data in file [format "file%d.dat.hist" $file_index ]"
+            return
+          }
 
           set forwardxmin [lindex [lindex $data_file 0] 0]
 
@@ -2705,6 +2719,11 @@ proc ::ParseFEP::fepdisp_unix { } {
           set infile [open [format "file%d.dat.rev.hist" $file_index ] "r"]
           set size [file size  [format "file%d.dat.rev.hist" $file_index ]  ]
           set data_file [split [read $infile $size ] "\n" ]
+
+          if {[llength $data_file] == 0} {
+            puts "Error: no data in file [format "file%d.dat.rev.hist" $file_index ]"
+            return
+          }
 
           set backwardxmin [lindex [lindex $data_file 0] 0]
 
