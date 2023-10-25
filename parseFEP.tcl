@@ -2696,6 +2696,7 @@ proc ::ParseFEP::fepdisp_unix { } {
           # JH 2020-04-10 Why is the size taken from the reverse file below? Fixed
           set size [file size  [format "file%d.dat.hist" $file_index ]  ]
           set data_file [split [read $infile $size ] "\n" ]
+          close $infile
 
           if {[llength $data_file] == 0} {
             puts "Error: no data in file [format "file%d.dat.hist" $file_index ]"
@@ -2719,6 +2720,7 @@ proc ::ParseFEP::fepdisp_unix { } {
           set infile [open [format "file%d.dat.rev.hist" $file_index ] "r"]
           set size [file size  [format "file%d.dat.rev.hist" $file_index ]  ]
           set data_file [split [read $infile $size ] "\n" ]
+          close $infile
 
           if {[llength $data_file] == 0} {
             puts "Error: no data in file [format "file%d.dat.rev.hist" $file_index ]"
